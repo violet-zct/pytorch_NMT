@@ -1,4 +1,4 @@
-from collections import defaultdict
+from collections import defaultdict, Counter
 import numpy as np
 
 def read_corpus(file_path, source):
@@ -49,3 +49,48 @@ def data_iter(data, batch_size, shuffle=True):
         np.random.shuffle(batched_data)
     for batch in batched_data:
         yield batch
+
+def ngrams(sequence, n):
+    """
+    borrowed from NLTK
+    """
+
+    sequence = iter(sequence)
+    history = []
+    while n > 1:
+        history.append(next(sequence))
+        n -= 1
+    for item in sequence:
+        history.append(item)
+        yield tuple(history)
+        del history[0]
+
+
+def calc_f1(reference, hypothesis):
+    """
+    F1 score between reference and hypothesis
+    """
+    f1_scores = []
+    k = 1
+    for n in xrange(1, 5):
+        hyp_ngram_counts = Counter(ngrams(hypothesis, n))
+        ref_ngram_counts = Counter(ngrams(reference, n))
+
+        ngram_f1 = 0.
+        if len(reference) < n:
+            continue
+
+        if len(hypothesis) >= n and len(reference) >= n:
+            ngram_prec = sum(ngram_count for ngram, ngram_count in hyp_ngram_counts.iteritems() if ngram in ref_ngram_counts) / (len(hypothesis) - n + 1)
+            ngram_recall = sum(ngram_count for ngram, ngram_count in ref_ngram_counts.iteritems() if ngram in hyp_ngram_counts) / (len(reference) - n + 1)
+
+            ngram_f1 = 2 * ngram_prec * ngram_recall / (ngram_prec + ngram_recall) if ngram_prec + ngram_recall > 0. else 0.
+
+        if len(hypothesis) < n <= len(reference) or ngram_f1 == 0.:
+            ngram_f1 = 1. / (2 ** k * (len(reference) - n + 1))
+
+        f1_scores.append(ngram_f1)
+
+    f1_mean = (np.prod(f1_scores)) ** (1 / len(f1_scores))
+
+    return f1_mean
