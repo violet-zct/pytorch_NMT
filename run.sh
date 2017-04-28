@@ -11,4 +11,6 @@ python nmt.py \
     --sample_size 50 \
     --reward_type "bleu" \
     --valid_niter 1000 \
+    --load_model "" \
+    --save_to "" \
     --log_every 5
