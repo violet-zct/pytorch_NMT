@@ -150,6 +150,35 @@ class NMT(nn.Module):
 
         return scores
 
+    def load_state_dict(self, state_dict):
+        """Copies parameters and buffers from :attr:`state_dict` into
+        this module and its descendants. The keys of :attr:`state_dict` must
+        exactly match the keys returned by this module's :func:`state_dict()`
+        function.
+
+        Arguments:
+            state_dict (dict): A dict containing parameters and
+                persistent buffers.
+        """
+        own_state = self.state_dict()
+        for name, param in state_dict.items():
+            if name not in own_state and name.startswith('baseline'):
+                print("no baseline in MLE")
+                continue
+            elif name not in own_state:
+                raise KeyError('unexpected key "{}" in state_dict'
+                               .format(name))
+            if isinstance(param, Parameter):
+                # backwards compatibility for serialized parameters
+                param = param.data
+            own_state[name].copy_(param)
+
+        missing = set(own_state.keys()) - set(state_dict.keys())
+        if len(missing) == 2:
+            print("miss dealine parameters is fine!")
+        else:
+            raise KeyError('missing keys in state_dict: "{}"'.format(missing))
+
     def encode(self, src_sents, src_sents_len):
         """
         :param src_sents: (src_sent_len, batch_size), sorted by the length of the source
@@ -554,7 +583,7 @@ def init_training(args):
         saved_args = params['args']
         state_dict = params['state_dict']
 
-        model = NMT(saved_args, vocab)
+        model = NMT(args, vocab)
         model.load_state_dict(state_dict)
     else:
         model = NMT(args, vocab)
