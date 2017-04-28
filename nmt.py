@@ -42,13 +42,13 @@ def init_config():
     parser.add_argument('--test_src', type=str, help='path to the test source file')
     parser.add_argument('--test_tgt', type=str, help='path to the test target file')
 
-    parser.add_argument('--decode_max_time_step', default=20, type=int, help='maximum number of time steps used '
+    parser.add_argument('--decode_max_time_step', default=200, type=int, help='maximum number of time steps used '
                                                                               'in decoding and sampling')
 
     parser.add_argument('--model_type', default='ml', type=str, choices=['ml','rl'])
     parser.add_argument('--valid_niter', default=500, type=int, help='every n iterations to perform validation')
     parser.add_argument('--valid_metric', default='bleu', choices=['bleu', 'ppl', 'word_acc', 'sent_acc'], help='metric used for validation')
-    parser.add_argument('--log_every', default=50, type=int, help='every n iterations to log training statistics')
+    parser.add_argument('--log_every', default=500, type=int, help='every n iterations to log training statistics')
     parser.add_argument('--load_model', default=None, type=str, help='load a pre-trained model')
     parser.add_argument('--save_to', default='model', type=str, help='save trained model to')
     parser.add_argument('--save_model_after', default=2, help='save the model only after n validation iterations')
@@ -66,9 +66,6 @@ def init_config():
     # raml training
     # parser.add_argument('--temp', default=0.85, type=float, help='temperature in reward distribution')
     # parser.add_argument('--raml_sample_file', type=str, help='path to the sampled targets')
-
-    #TODO: greedy sampling is still buggy!
-    parser.add_argument('--sample_method', default='random', choices=['random', 'greedy'])
 
     args = parser.parse_args()
 
@@ -114,6 +111,7 @@ def get_reward(tgt_sent, sample, reward='bleu'):
     elif reward == 'combined':
         score = sentence_bleu([tgt_sent], sample) + calc_f1(tgt_sent, sample)
     return score
+
 
 class NMT(nn.Module):
     def __init__(self, args, vocab):
@@ -426,7 +424,7 @@ class NMT(nn.Module):
                     rewards.append(get_reward(tgt_sents[src_sent_id], completed_samples[src_sent_id][sample_id][1:-1], reward_type))
 
         rewards = Variable(torch.FloatTensor(rewards), requires_grad=False)
-
+        # neg_log_probs = Variable(torch.zeros(batch_size), requires_grad=False)
         for i in range(len(samples)-1):
             b_t = baselines[i]
             mask_t = mask_sample[i*batch_size:(i+1)*batch_size]
@@ -435,6 +433,7 @@ class NMT(nn.Module):
             # print(rewards.size())
             # print(b_t.size())
             # print(prob_t.size())
+            # neg_log_probs += prob_t
             prob_t = (rewards - b_t) * prob_t
             b_t = (rewards - b_t).pow(2)
 
@@ -456,7 +455,7 @@ class NMT(nn.Module):
             for i, src_sent_samples in enumerate(completed_samples):
                 completed_samples[i] = word2id(src_sent_samples, self.vocab.tgt.id2word)
 
-        return sum_loss_b, sum_prob_t
+        return sum_loss_b, sum_prob_t, torch.mean(rewards)
 
     def attention(self, h_t, src_encoding, src_linear_for_att):
         # (1, batch_size, attention_size) + (src_sent_len, batch_size, attention_size) =>
@@ -612,9 +611,10 @@ def train(args):
                 cum_loss += word_loss_val
 
             elif args.model_type=='rl':
-                loss_b, loss_rl = model.sample_with_loss(src_sents, tgt_sents, args.sample_size)
+                loss_b, loss_rl, avg_reward = model.sample_with_loss(src_sents, tgt_sents, args.sample_size)
                 loss = loss_b + loss_rl
                 loss_val = loss.data[0]
+                reward_val = avg_reward.data[0]
                 report_loss += loss_val * batch_size
                 cum_loss += loss_val * batch_size
 
@@ -631,10 +631,10 @@ def train(args):
             cum_batches += batch_size
 
             if train_iter % args.log_every == 0:
-                print('epoch %d, iter %d, avg. loss %.2f, avg. ppl %.2f ' \
+                print('epoch %d, iter %d, avg. loss %.2f, avg. reward %.2f ' \
                       'cum. examples %d, speed %.2f words/sec, time elapsed %.2f sec' % (epoch, train_iter,
                                                                                          report_loss / report_examples,
-                                                                                         np.exp(report_loss / report_tgt_words),
+                                                                                         reward_val,
                                                                                          cum_examples,
                                                                                          report_tgt_words / (time.time() - train_time),
                                                                                          time.time() - begin_time), file=sys.stderr)
