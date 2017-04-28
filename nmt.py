@@ -346,10 +346,11 @@ class NMT(nn.Module):
         eos = self.vocab.tgt['</s>']
         print("eos: ", eos)
         eos_batch = torch.LongTensor([eos] * batch_size)
+        offset = torch.mul(torch.range(0, batch_size - 1), batch_size).long()
         if args.cuda:
             y_0 = y_0.cuda()
             eos_batch = eos_batch.cuda()
-
+            offset = offset.cuda()
         samples = [y_0]
 
         baselines = []
@@ -382,7 +383,8 @@ class NMT(nn.Module):
 
             y_t = torch.multinomial(p_t, num_samples=1).squeeze(1)
             y_t = y_t.detach()
-            y_t_offset = y_t.data + torch.mul(torch.range(0, batch_size-1), batch_size).long()
+
+            y_t_offset = y_t.data + offset
 
             samples.append(y_t)
             p_t = p_t.view(-1)
@@ -424,6 +426,10 @@ class NMT(nn.Module):
                     rewards.append(get_reward(tgt_sents[src_sent_id], completed_samples[src_sent_id][sample_id][1:-1], reward_type))
 
         rewards = Variable(torch.FloatTensor(rewards), requires_grad=False)
+        mask_sample = Variable(torch.FloatTensor(mask_sample), required_grad=False)
+        if args.cuda:
+            rewards = rewards.cuda()
+            mask_sample = mask_sample.cuda()
         # neg_log_probs = Variable(torch.zeros(batch_size), requires_grad=False)
         for i in range(len(samples)-1):
             b_t = baselines[i]
@@ -437,8 +443,7 @@ class NMT(nn.Module):
             prob_t = (rewards - b_t) * prob_t
             b_t = (rewards - b_t).pow(2)
 
-            if 0.0 in mask_t:
-                mask_t = Variable(torch.FloatTensor(mask_t), requires_grad=False)
+            if 0.0 in mask_t.data:
                 prob_t = mask_t * prob_t
                 b_t = mask_t * b_t
 
