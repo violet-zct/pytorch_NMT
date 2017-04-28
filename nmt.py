@@ -373,13 +373,17 @@ class NMT(nn.Module):
         y_0 = Variable(torch.LongTensor([self.vocab.tgt['<s>'] for _ in xrange(batch_size)]))
 
         eos = self.vocab.tgt['</s>']
-        print("eos: ", eos)
-        eos_batch = torch.LongTensor([eos] * batch_size)
+        sample_ends = torch.ByteTensor([0] * batch_size)
+        all_ones = torch.ByteTensor([1] * batch_size)
+        # eos_batch = torch.LongTensor([eos] * batch_size)
         offset = torch.mul(torch.range(0, batch_size - 1), batch_size).long()
         if args.cuda:
             y_0 = y_0.cuda()
-            eos_batch = eos_batch.cuda()
+            # eos_batch = eos_batch.cuda()
             offset = offset.cuda()
+            sample_ends.cuda()
+            all_ones.cuda()
+
         samples = [y_0]
 
         baselines = []
@@ -420,8 +424,11 @@ class NMT(nn.Module):
             p_t = -torch.log(p_t)
             sample_losses.append(p_t[y_t_offset])
 
-            if torch.equal(y_t.data, eos_batch):
+            sample_ends |= torch.eq(y_t, eos).byte().data
+            if torch.equal(sample_ends, all_ones):
                 break
+            # if torch.equal(y_t.data, eos_batch):
+            #     break
 
             att_tm1 = att_t
             hidden = h_t, cell_t
@@ -455,7 +462,7 @@ class NMT(nn.Module):
                     rewards.append(get_reward(tgt_sents[src_sent_id], completed_samples[src_sent_id][sample_id][1:-1], reward_type))
 
         rewards = Variable(torch.FloatTensor(rewards), requires_grad=False)
-        mask_sample = Variable(torch.FloatTensor(mask_sample), required_grad=False)
+        mask_sample = Variable(torch.FloatTensor(mask_sample), requires_grad=False)
         if args.cuda:
             rewards = rewards.cuda()
             mask_sample = mask_sample.cuda()
@@ -469,6 +476,9 @@ class NMT(nn.Module):
             # print(b_t.size())
             # print(prob_t.size())
             # neg_log_probs += prob_t
+            print("time step: ", i)
+            print("rewards: ", rewards)
+            print("baselines: ", b_t)
             prob_t = (rewards - b_t) * prob_t
             b_t = (rewards - b_t).pow(2)
 
@@ -485,9 +495,12 @@ class NMT(nn.Module):
         sum_loss_b = torch.sum(loss_b)/mask_sum
         sum_prob_t = torch.sum(prob_t)/batch_size
 
+        print("sum of mask: ", mask_sum)
+        print("sum_prob_t", sum_prob_t)
         if to_word:
             for i, src_sent_samples in enumerate(completed_samples):
                 completed_samples[i] = word2id(src_sent_samples, self.vocab.tgt.id2word)
+                print(completed_samples)
 
         return sum_loss_b, sum_prob_t, torch.mean(rewards)
 
@@ -656,7 +669,7 @@ def train(args):
                 cum_loss += word_loss_val
 
             elif args.model_type=='rl':
-                loss_b, loss_rl, avg_reward = model.sample_with_loss(src_sents, tgt_sents, args.sample_size)
+                loss_b, loss_rl, avg_reward = model.sample_with_loss(src_sents, tgt_sents, args.sample_size, True)
                 loss = loss_b + loss_rl
                 loss_val = loss.data[0]
                 reward_val = avg_reward.data[0]
