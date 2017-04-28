@@ -8,4 +8,7 @@ python nmt.py \
     --test_tgt ./en-de/test.en-de.low.en \
     --vocab ./vocab.bin \
     --model_type "rl" \
+    --sample_size 50 \
+    --reward_type "bleu" \
+    --valid_niter 1000 \
     --log_every 5
