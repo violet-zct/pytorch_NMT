@@ -42,7 +42,7 @@ def init_config():
     parser.add_argument('--test_src', type=str, help='path to the test source file')
     parser.add_argument('--test_tgt', type=str, help='path to the test target file')
 
-    parser.add_argument('--decode_max_time_step', default=200, type=int, help='maximum number of time steps used '
+    parser.add_argument('--decode_max_time_step', default=20, type=int, help='maximum number of time steps used '
                                                                               'in decoding and sampling')
 
     parser.add_argument('--model_type', default='ml', type=str, choices=['ml','rl'])
@@ -331,7 +331,7 @@ class NMT(nn.Module):
 
         src_sents_num = len(src_sents)
         batch_size = src_sents_num * sample_size
-        src_sents_var = to_input_variable(src_sents, self.vocab.src, cuda=args.cuda, is_test=True)
+        src_sents_var = to_input_variable(src_sents, self.vocab.src, cuda=args.cuda, is_test=False)
         src_encoding, (dec_init_state, dec_init_cell) = self.encode(src_sents_var, [len(s) for s in src_sents])
 
         src_encoding = src_encoding.repeat(1, sample_size, 1)
@@ -342,10 +342,11 @@ class NMT(nn.Module):
         hidden = (dec_init_state, dec_init_cell)
         new_tensor = dec_init_state.data.new
 
-        att_tm1 = Variable(new_tensor(batch_size, self.args.hidden_size).zero_(), volatile=True)
-        y_0 = Variable(torch.LongTensor([self.vocab.tgt['<s>'] for _ in xrange(batch_size)]), volatile=True)
+        att_tm1 = Variable(new_tensor(batch_size, self.args.hidden_size).zero_())
+        y_0 = Variable(torch.LongTensor([self.vocab.tgt['<s>'] for _ in xrange(batch_size)]))
 
         eos = self.vocab.tgt['</s>']
+        print("eos: ", eos)
         eos_batch = torch.LongTensor([eos] * batch_size)
         if args.cuda:
             y_0 = y_0.cuda()
@@ -377,15 +378,16 @@ class NMT(nn.Module):
 
             score_t = self.readout(att_t)  # E.q. (6)
             p_t = F.softmax(score_t)
-            p_t = p_t.view(-1)
 
             detach_h_t = h_t.detach()
             baselines.append(self.baseline(detach_h_t).squeeze(1))
 
             y_t = torch.multinomial(p_t, num_samples=1).squeeze(1)
-            y_t_offset = y_t + torch.LongTensor(np.arange(batch_size)) * batch_size
+            y_t = y_t.detach()
+            y_t_offset = y_t.data + torch.mul(torch.range(0, batch_size-1), batch_size).long()
 
             samples.append(y_t)
+            p_t = p_t.view(-1)
             p_t = -torch.log(p_t)
             sample_losses.append(p_t[y_t_offset])
 
@@ -403,12 +405,12 @@ class NMT(nn.Module):
         rewards = []
         loss_b = []
         loss_t = []
-        for y_t in samples:
+        for j, y_t in enumerate(samples):
             for i, sampled_word in enumerate(y_t.cpu().data):
                 src_sent_id = i % src_sents_num
                 sample_id = i / src_sents_num
-                if eos_found[i] and first_eos_found[i]:
-                    rewards.append(get_reward(tgt_sents[i], completed_samples[src_sent_id][sample_id], reward_type))
+                # if eos_found[i] and first_eos_found[i]:
+                #     rewards.append(get_reward(tgt_sents[i], completed_samples[src_sent_id][sample_id], reward_type))
                 if len(completed_samples[src_sent_id][sample_id]) == 0 or completed_samples[src_sent_id][sample_id][-1] != eos:
                     completed_samples[src_sent_id][sample_id].append(sampled_word)
                     mask_sample.append(1.0)
@@ -420,13 +422,19 @@ class NMT(nn.Module):
                         first_eos_found[i] = False
                         mask_sample.append(0.0)
                     eos_found[i] = True
+                if j == len(samples) - 1:
+                    rewards.append(get_reward(tgt_sents[src_sent_id], completed_samples[src_sent_id][sample_id][1:-1], reward_type))
 
         rewards = Variable(torch.FloatTensor(rewards), requires_grad=False)
-        for i, y_t in enumerate(samples):
+
+        for i in range(len(samples)-1):
             b_t = baselines[i]
             mask_t = mask_sample[i*batch_size:(i+1)*batch_size]
             prob_t = sample_losses[i]
 
+            # print(rewards.size())
+            # print(b_t.size())
+            # print(prob_t.size())
             prob_t = (rewards - b_t) * prob_t
             b_t = (rewards - b_t).pow(2)
 
@@ -604,7 +612,7 @@ def train(args):
                 cum_loss += word_loss_val
 
             elif args.model_type=='rl':
-                loss_b, loss_rl = model.sample_with_loss(src_sents_var, tgt_sents, args.sample_size)
+                loss_b, loss_rl = model.sample_with_loss(src_sents, tgt_sents, args.sample_size)
                 loss = loss_b + loss_rl
                 loss_val = loss.data[0]
                 report_loss += loss_val * batch_size
