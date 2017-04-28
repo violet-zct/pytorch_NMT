@@ -580,7 +580,7 @@ def train(args):
     cum_examples = cum_batches = report_examples = epoch = valid_num = best_model_iter = 0
     hist_valid_scores = []
     train_time = begin_time = time.time()
-
+    reward_val = 0.
     if args.model_type=='ml':
         print('Begin Maximum Likelihood training..')
     elif args.model_type=='rl':
