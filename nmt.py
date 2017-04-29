@@ -373,7 +373,7 @@ class NMT(nn.Module):
         y_0 = Variable(torch.LongTensor([self.vocab.tgt['<s>'] for _ in xrange(batch_size)]))
 
         eos = self.vocab.tgt['</s>']
-        print("eos: ", eos)
+        #print("eos: ", eos)
         eos_batch = torch.LongTensor([eos] * batch_size)
         offset = torch.mul(torch.range(0, batch_size - 1), batch_size).long()
         if args.cuda:
@@ -455,7 +455,7 @@ class NMT(nn.Module):
                     rewards.append(get_reward(tgt_sents[src_sent_id], completed_samples[src_sent_id][sample_id][1:-1], reward_type))
 
         rewards = Variable(torch.FloatTensor(rewards), requires_grad=False)
-        mask_sample = Variable(torch.FloatTensor(mask_sample), required_grad=False)
+        mask_sample = Variable(torch.FloatTensor(mask_sample), requires_grad=False)
         if args.cuda:
             rewards = rewards.cuda()
             mask_sample = mask_sample.cuda()
