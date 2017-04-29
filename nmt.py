@@ -382,7 +382,7 @@ class NMT(nn.Module):
             all_ones = torch.ByteTensor([1] * batch_size)
 
         # eos_batch = torch.LongTensor([eos] * batch_size)
-        offset = torch.mul(torch.range(0, batch_size - 1), batch_size).long()
+        offset = torch.mul(torch.range(0, batch_size - 1), len(self.vocab.tgt)).long()
         if args.cuda:
             y_0 = y_0.cuda()
             epsilon = epsilon.cuda()
