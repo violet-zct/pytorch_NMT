@@ -438,31 +438,28 @@ class NMT(nn.Module):
         eos_found = [False] * batch_size
         first_eos_found = [False] * batch_size
         mask_sample = []
-        rewards = []
-        loss_b = []
-        loss_t = []
+        rewards = [-1] * batch_size
         for j, y_t in enumerate(samples):
             for i, sampled_word in enumerate(y_t.cpu().data):
                 src_sent_id = i % src_sents_num
                 sample_id = i / src_sents_num
-                # if eos_found[i] and first_eos_found[i]:
-                #     rewards.append(get_reward(tgt_sents[i], completed_samples[src_sent_id][sample_id], reward_type))
-                if len(completed_samples[src_sent_id][sample_id]) == 0 or completed_samples[src_sent_id][sample_id][-1] != eos:
+
+                if (len(completed_samples[src_sent_id][sample_id]) == 0 or completed_samples[src_sent_id][sample_id][-1] != eos) and rewards[sample_id] == -1:
                     completed_samples[src_sent_id][sample_id].append(sampled_word)
                     mask_sample.append(1.0)
                 else:
-                    if completed_samples[src_sent_id][sample_id][-2] != eos:
-                        first_eos_found[i] = True
-                        mask_sample.append(1.0)
-                    else:
-                        first_eos_found[i] = False
-                        mask_sample.append(0.0)
-                    eos_found[i] = True
-                if j == len(samples) - 1:
-                    rewards.append(get_reward(tgt_sents[src_sent_id], completed_samples[src_sent_id][sample_id][1:-1], reward_type))
+                    mask_sample.append(0.0)
+                    if rewards[sample_id] == -1:
+                        rewards[sample_id] = get_reward(tgt_sents[src_sent_id],
+                                                word2id(completed_samples[src_sent_id][sample_id],
+                                                        self.vocab.tgt.id2word), reward_type)
+                # if j == len(samples) - 1:
+                #     rewards.append(get_reward(tgt_sents[src_sent_id], completed_samples[src_sent_id][sample_id][1:-1], reward_type))
 
         rewards = Variable(torch.FloatTensor(rewards), requires_grad=False)
         mask_sample = Variable(torch.FloatTensor(mask_sample), requires_grad=False)
+        loss_b = []
+        loss_t = []
         if args.cuda:
             rewards = rewards.cuda()
             mask_sample = mask_sample.cuda()
@@ -476,9 +473,10 @@ class NMT(nn.Module):
             # print(b_t.size())
             # print(prob_t.size())
             # neg_log_probs += prob_t
-            print("time step: ", i)
-            print("rewards: ", rewards)
-            print("baselines: ", b_t)
+            # print("time step: ", i)
+            # print("rewards: ", rewards.size())
+            # print("baselines: ", b_t.size())
+            # print(type(prob_t))
             prob_t = (rewards - b_t) * prob_t
             b_t = (rewards - b_t).pow(2)
 
@@ -490,17 +488,22 @@ class NMT(nn.Module):
             loss_t.append(prob_t)
 
         mask_sum = sum(mask_sample)
-        loss_b = torch.cat(b_t, 0)
-        prob_t = torch.cat(prob_t, 0)
+        loss_b = torch.cat(loss_b, 0) # max_len, batch_size
+        prob_t = torch.cat(loss_t, 0)
+        # print("before sum loss b: ", loss_b)
+        # print("before sum prob: ", prob_t)
         sum_loss_b = torch.sum(loss_b)/mask_sum
         sum_prob_t = torch.sum(prob_t)/batch_size
 
-        print("sum of mask: ", mask_sum)
-        print("sum_prob_t", sum_prob_t)
+        # print("sum of mask: ", mask_sum.data)
+        # print("sum_prob_t: ", sum_prob_t.data)
+        # print("sum of b t: ", sum_loss_b.data)
         if to_word:
             for i, src_sent_samples in enumerate(completed_samples):
+                tgt_sent_id = i % src_sents_num
+                # print("Ground truth: ", tgt_sents[tgt_sent_id])
                 completed_samples[i] = word2id(src_sent_samples, self.vocab.tgt.id2word)
-                print(completed_samples)
+                # print(completed_samples[i])
 
         return sum_loss_b, sum_prob_t, torch.mean(rewards)
 
