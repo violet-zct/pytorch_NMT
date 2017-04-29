@@ -371,6 +371,7 @@ class NMT(nn.Module):
 
         att_tm1 = Variable(new_tensor(batch_size, self.args.hidden_size).zero_())
         y_0 = Variable(torch.LongTensor([self.vocab.tgt['<s>'] for _ in xrange(batch_size)]))
+        epsilon = Variable(torch.ones(batch_size*len(self.vocab.tgt)) * 1e-20, requires_grad=False)
 
         eos = self.vocab.tgt['</s>']
         if args.cuda:
@@ -384,6 +385,7 @@ class NMT(nn.Module):
         offset = torch.mul(torch.range(0, batch_size - 1), batch_size).long()
         if args.cuda:
             y_0 = y_0.cuda()
+            epsilon = epsilon.cuda()
             # eos_batch = eos_batch.cuda()
             offset = offset.cuda()
             # sample_ends.cuda()
@@ -429,7 +431,7 @@ class NMT(nn.Module):
 
             samples.append(y_t)
             p_t = p_t.view(-1)
-            p_t = -torch.log(p_t)
+            p_t = -torch.log(p_t + epsilon)
             sample_losses.append(p_t[y_t_offset])
             
             sample_ends |= torch.eq(y_t, eos).byte().data
@@ -498,7 +500,9 @@ class NMT(nn.Module):
             # print("rewards: ", rewards.size())
             # print("baselines: ", b_t.size())
             # print(type(prob_t))
-            prob_t = (rewards - b_t) * prob_t
+
+            b_t_detach = b_t.detach()
+            prob_t = (rewards - b_t_detach) * prob_t
             b_t = (rewards - b_t).pow(2)
 
             if 0.0 in mask_t.data:
@@ -508,25 +512,25 @@ class NMT(nn.Module):
             loss_b.append(b_t)
             loss_t.append(prob_t)
 
-        print("rewards: ", rewards)
+        # print("rewards: ", rewards)
         mask_sum = sum(mask_sample)
         loss_b = torch.cat(loss_b, 0) # max_len, batch_size
         prob_t = torch.cat(loss_t, 0)
-        print("before sum loss b: ", loss_b)
-        print("before sum prob: ", prob_t)
+        # print("before sum loss b: ", loss_b)
+        # print("before sum prob: ", prob_t)
         sum_loss_b = torch.sum(loss_b)/mask_sum
         sum_prob_t = torch.sum(prob_t)/batch_size
 
-        print("sum of mask: ", mask_sum.data)
-        print("sum_prob_t: ", sum_prob_t.data)
-        print("sum of b t: ", sum_loss_b.data)
+        # print("sum of mask: ", mask_sum.data)
+        # print("sum_prob_t: ", sum_prob_t.data)
+        # print("sum of b t: ", sum_loss_b.data)
         if to_word:
             for i, src_sent_samples in enumerate(completed_samples):
                 tgt_sent_id = i % src_sents_num
                # print("Ground truth: ", tgt_sents[tgt_sent_id])
                 completed_samples[i] = word2id(src_sent_samples, self.vocab.tgt.id2word)
                # print(completed_samples[i])
-        print("mean reward: ", torch.mean(rewards))
+        # print("mean reward: ", torch.mean(rewards))
         return sum_loss_b, sum_prob_t, torch.mean(rewards)
 
     def attention(self, h_t, src_encoding, src_linear_for_att):
