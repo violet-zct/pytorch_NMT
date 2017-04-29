@@ -1,3 +1,4 @@
+from __future__ import division
 from collections import defaultdict, Counter
 import numpy as np
 
@@ -94,3 +95,9 @@ def calc_f1(reference, hypothesis):
     f1_mean = (np.prod(f1_scores)) ** (1 / len(f1_scores))
 
     return f1_mean
+
+if __name__ == '__main__':
+    ref_sent = 'thank you .'.split(' ')
+    hyp_sent = 'thank'.split(' ')
+
+    print calc_f1(ref_sent, hyp_sent)
