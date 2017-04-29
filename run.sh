@@ -7,10 +7,12 @@ python nmt.py \
     --test_src ./en-de/test.en-de.low.de \
     --test_tgt ./en-de/test.en-de.low.en \
     --vocab ./vocab.bin \
-    --model_type "rl" \
-    --sample_size 50 \
+    --model_type rl \
+    --sample_size 5 \
     --reward_type "bleu" \
     --valid_niter 1000 \
-    --load_model "" \
-    --save_to "" \
+    --load_model mle.bin \
+    --save_to mle_rl_bleu \
+    --decode_max_time_step 100 \
+    --batch_size 5 \
     --log_every 5
