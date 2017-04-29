@@ -672,6 +672,7 @@ def train(args):
         print('Begin Maximum Likelihood training..')
     elif args.model_type=='rl':
         print('Begin RL-based training..')
+    total_loss_rl = 0.
     while True:
         epoch += 1
         for src_sents, tgt_sents in data_iter(train_data, batch_size=args.batch_size):
@@ -704,6 +705,7 @@ def train(args):
                 reward_val = avg_reward.data[0]
                 report_loss += loss_val * batch_size
                 cum_loss += loss_val * batch_size
+                total_loss_rl += loss_rl.data[0]*batch_size
 
             loss.backward()
             # clip gradient
@@ -725,7 +727,7 @@ def train(args):
                                                                                          cum_examples,
                                                                                          report_tgt_words / (time.time() - train_time),
                                                                                          time.time() - begin_time), file=sys.stderr)
-
+                print('loss_rl %.3f'%(total_loss_rl/report_examples))
                 train_time = time.time()
                 report_loss = report_tgt_words = report_examples = 0.
 
