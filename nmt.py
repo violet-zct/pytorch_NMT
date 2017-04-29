@@ -426,7 +426,7 @@ class NMT(nn.Module):
             p_t = p_t.view(-1)
             p_t = -torch.log(p_t)
             sample_losses.append(p_t[y_t_offset])
-           
+            
             sample_ends |= torch.eq(y_t, eos).byte().data
             if torch.equal(sample_ends, all_ones):
                 break
@@ -438,8 +438,6 @@ class NMT(nn.Module):
 
         # post-processing
         completed_samples = [list([list() for _ in xrange(sample_size)]) for _ in xrange(src_sents_num)]
-        eos_found = [False] * batch_size
-        first_eos_found = [False] * batch_size
         mask_sample = []
         rewards = [-1] * batch_size
         for j, y_t in enumerate(samples):
@@ -452,12 +450,20 @@ class NMT(nn.Module):
                     mask_sample.append(1.0)
                 else:
                     mask_sample.append(0.0)
-                    if rewards[sample_id] == -1:
-                        rewards[sample_id] = get_reward(tgt_sents[src_sent_id],
-                                                word2id(completed_samples[src_sent_id][sample_id],
+                    if rewards[i] == -1:
+                        rewards[i] = get_reward(tgt_sents[src_sent_id],
+                                                word2id(completed_samples[src_sent_id][sample_id][1:-1],
                                                         self.vocab.tgt.id2word), reward_type)
                 # if j == len(samples) - 1:
                 #     rewards.append(get_reward(tgt_sents[src_sent_id], completed_samples[src_sent_id][sample_id][1:-1], reward_type))
+        # if no <eos> is predicted, we still calculate rewards
+        for i in range(batch_size):
+            src_sent_id = i % src_sents_num
+            sample_id = i / src_sents_num
+            if rewards[i] == -1:
+                rewards[i] = get_reward(tgt_sents[src_sent_id],
+                                               word2id(completed_samples[src_sent_id][sample_id][1:],
+                                                       self.vocab.tgt.id2word), reward_type)
 
         rewards = Variable(torch.FloatTensor(rewards), requires_grad=False)
         mask_sample = Variable(torch.FloatTensor(mask_sample), requires_grad=False)
@@ -468,6 +474,7 @@ class NMT(nn.Module):
             rewards = rewards.cuda()
             mask_sample = mask_sample.cuda()
         # neg_log_probs = Variable(torch.zeros(batch_size), requires_grad=False)
+        print(rewards)
         for i in range(len(samples)-1):
             b_t = baselines[i]
             mask_t = mask_sample[i*batch_size:(i+1)*batch_size]
@@ -505,9 +512,9 @@ class NMT(nn.Module):
         if to_word:
             for i, src_sent_samples in enumerate(completed_samples):
                 tgt_sent_id = i % src_sents_num
-                # print("Ground truth: ", tgt_sents[tgt_sent_id])
+                print("Ground truth: ", tgt_sents[tgt_sent_id])
                 completed_samples[i] = word2id(src_sent_samples, self.vocab.tgt.id2word)
-                # print(completed_samples[i])
+                print(completed_samples[i])
 
         return sum_loss_b, sum_prob_t, torch.mean(rewards)
 
