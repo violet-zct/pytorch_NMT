@@ -373,8 +373,8 @@ class NMT(nn.Module):
         y_0 = Variable(torch.LongTensor([self.vocab.tgt['<s>'] for _ in xrange(batch_size)]))
 
         eos = self.vocab.tgt['</s>']
-        sample_ends = torch.ByteTensor([0] * batch_size)
-        all_ones = torch.ByteTensor([1] * batch_size)
+        sample_ends = torch.cuda.ByteTensor([0] * batch_size)
+        all_ones = torch.cuda.ByteTensor([1] * batch_size)
         # eos_batch = torch.LongTensor([eos] * batch_size)
         offset = torch.mul(torch.range(0, batch_size - 1), batch_size).long()
         if args.cuda:
@@ -383,7 +383,10 @@ class NMT(nn.Module):
             offset = offset.cuda()
             sample_ends.cuda()
             all_ones.cuda()
-
+            
+        #    print("offset: ", type(offset))
+         #   print("sample_ends: ", type(sample_ends))
+         #   print("ones:", type(all_ones))
         samples = [y_0]
 
         baselines = []
@@ -423,7 +426,7 @@ class NMT(nn.Module):
             p_t = p_t.view(-1)
             p_t = -torch.log(p_t)
             sample_losses.append(p_t[y_t_offset])
-
+           
             sample_ends |= torch.eq(y_t, eos).byte().data
             if torch.equal(sample_ends, all_ones):
                 break
