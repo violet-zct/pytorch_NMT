@@ -176,7 +176,7 @@ class NMT(nn.Module):
         missing = set(own_state.keys()) - set(state_dict.keys())
         if len(missing) == 2:
             print("miss dealine parameters is fine!")
-        else:
+        elif len(missing)!=0:
             raise KeyError('missing keys in state_dict: "{}"'.format(missing))
 
     def encode(self, src_sents, src_sents_len):
