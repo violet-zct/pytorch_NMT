@@ -729,7 +729,7 @@ def train(args):
                                                                                          time.time() - begin_time), file=sys.stderr)
                 print('loss_rl %.3f'%(total_loss_rl/report_examples))
                 train_time = time.time()
-                report_loss = report_tgt_words = report_examples = 0.
+                total_loss_rl = report_loss = report_tgt_words = report_examples = 0.
 
             # perform validation
             if train_iter % args.valid_niter == 0:
