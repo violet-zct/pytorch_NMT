@@ -893,7 +893,7 @@ def test(args):
     if args.cuda:
         model = model.cuda()
 
-    hypotheses = decode(model, test_data)
+    hypotheses = decode(model, test_data,False)
     top_hypotheses = [hyps[0] for hyps in hypotheses]
 
     bleu_score = get_bleu([tgt for src, tgt in test_data], top_hypotheses)
