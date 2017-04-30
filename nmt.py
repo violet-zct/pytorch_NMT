@@ -60,7 +60,7 @@ def init_config():
     parser.add_argument('--max_niter', default=-1, type=int, help='maximum number of training iterations')
     parser.add_argument('--lr', default=0.001, type=float, help='learning rate')
     parser.add_argument('--lr_decay', default=0.5, type=float, help='decay learning rate if the validation performance drops')
-
+    parser.add_argument('--update_freq', default=1, type=int, help='update freq')
     parser.add_argument('--reward_type', default='bleu', type=str, choices=['bleu', 'f1', 'combined'])
 
     # raml training
@@ -527,9 +527,10 @@ class NMT(nn.Module):
         if to_word:
             for i, src_sent_samples in enumerate(completed_samples):
                 tgt_sent_id = i % src_sents_num
-               # print("Ground truth: ", tgt_sents[tgt_sent_id])
+                print("Ground truth: ", ' '.join(tgt_sents[tgt_sent_id]))
                 completed_samples[i] = word2id(src_sent_samples, self.vocab.tgt.id2word)
-               # print(completed_samples[i])
+                for e in completed_samples[i]:
+                    print(' '.join(e))
         # print("mean reward: ", torch.mean(rewards))
         return sum_loss_b, sum_prob_t, torch.mean(rewards)
 
@@ -646,7 +647,11 @@ def init_training(args):
         nll_loss = nll_loss.cuda()
         cross_entropy_loss = cross_entropy_loss.cuda()
 
-    optimizer = torch.optim.Adam(model.parameters(), lr=args.lr)
+    if args.model_type == "ml":
+        optimizer = torch.optim.Adam(model.parameters(), lr=args.lr)
+    else:
+        # rl
+        optimizer = torch.optim.SGD(model.parameters(), lr=1e-4, momentum=0.)
 
     return vocab, model, optimizer, nll_loss, cross_entropy_loss
 
@@ -672,7 +677,8 @@ def train(args):
         print('Begin Maximum Likelihood training..')
     elif args.model_type=='rl':
         print('Begin RL-based training..')
-    total_loss_rl = 0.
+    total_loss_baseline = 0.
+    optimizer.zero_grad()
     while True:
         epoch += 1
         for src_sents, tgt_sents in data_iter(train_data, batch_size=args.batch_size):
@@ -685,7 +691,8 @@ def train(args):
             src_sents_len = [len(s) for s in src_sents]
             pred_tgt_word_num = sum(len(s[1:]) for s in tgt_sents) # omitting leading `<s>`
 
-            optimizer.zero_grad()
+
+            
 
 
             if args.model_type=='ml':
@@ -699,18 +706,20 @@ def train(args):
                 cum_loss += word_loss_val
 
             elif args.model_type=='rl':
-                loss_b, loss_rl, avg_reward = model.sample_with_loss(src_sents, tgt_sents, args.sample_size, True)
+                loss_b, loss_rl, avg_reward = model.sample_with_loss(src_sents, tgt_sents, args.sample_size, False)
                 loss = loss_b + loss_rl
                 loss_val = loss.data[0]
                 reward_val = avg_reward.data[0]
                 report_loss += loss_val * batch_size
                 cum_loss += loss_val * batch_size
-                total_loss_rl += loss_rl.data[0]*batch_size
+                total_loss_baseline += loss_b.data[0]*batch_size
 
             loss.backward()
             # clip gradient
             grad_norm = torch.nn.utils.clip_grad_norm(model.parameters(), args.clip_grad)
-            optimizer.step()
+            if train_iter % args.update_freq == 0:
+                optimizer.step()
+                optimizer.zero_grad()
 
 
             report_tgt_words += pred_tgt_word_num
@@ -727,9 +736,9 @@ def train(args):
                                                                                          cum_examples,
                                                                                          report_tgt_words / (time.time() - train_time),
                                                                                          time.time() - begin_time), file=sys.stderr)
-                print('loss_rl %.3f'%(total_loss_rl/report_examples))
+                print('baseline loss %.3f'%(total_loss_baseline/report_examples))
                 train_time = time.time()
-                total_loss_rl = report_loss = report_tgt_words = report_examples = 0.
+                total_loss_baseline = report_loss = report_tgt_words = report_examples = 0.
 
             # perform validation
             if train_iter % args.valid_niter == 0:
