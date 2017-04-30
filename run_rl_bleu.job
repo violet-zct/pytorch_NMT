@@ -42,6 +42,24 @@ python nmt.py \
     --save_to $model_name\
     --load_model $load_model_name.bin \
     --mode train\
+    --update_freq 4\
     --valid_niter 1000 \
+    --lr 0.0001 \
+    --patience 20 \
     --cuda\
 
+python nmt.py \
+    --train_src ./en-de/train.en-de.low.filt.de \
+    --train_tgt ./en-de/train.en-de.low.filt.en \
+    --dev_src ./en-de/valid.en-de.low.de \
+    --dev_tgt ./en-de/valid.en-de.low.en \
+    --test_src ./en-de/test.en-de.low.de \
+    --test_tgt ./en-de/test.en-de.low.en \
+    --vocab ./vocab.bin \
+    --decode_max_time_step 200\
+    --batch_size 32\
+    --model_type ml \
+    --log_every 50\
+    --load_model $model_name.bin \
+    --mode test\
+    --valid_niter 1000 \
