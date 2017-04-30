@@ -128,7 +128,7 @@ def get_rl_reward(ref_sent, hyp_sent):
 
     return reward
 
-def get_reward(tgt_sent, sample, reward='bleu'):
+def get_reward(tgt_sent, sample, reward='bleu',max_len=0):
     sm = SmoothingFunction()
     if reward=='bleu':
         score = sentence_bleu([tgt_sent], sample, smoothing_function=sm.method3)
@@ -154,7 +154,9 @@ def get_reward(tgt_sent, sample, reward='bleu'):
             cum_reward += reward_i
             score_list.append(cum_reward)
 
-        score_list = list(reversed(score_list))        
+        score_list = list(reversed(score_list))     
+        for i in range(max_len-len(score_list)):
+            score_list.append(0)
         score = score_list
     return score
 
@@ -509,7 +511,7 @@ class NMT(nn.Module):
                         else:
                             rewards[i] = get_reward(tgt_sents[src_sent_id][1:-1],
                                                 word2id(completed_samples[src_sent_id][sample_id][1:-1],
-                                                        self.vocab.tgt.id2word), reward_type)
+                                                        self.vocab.tgt.id2word), reward_type,len(samples)-1)
                 # if j == len(samples) - 1:
                 #     rewards.append(get_reward(tgt_sents[src_sent_id], completed_samples[src_sent_id][sample_id][1:-1], reward_type))
         # if no <eos> is predicted, we still calculate rewards
@@ -522,9 +524,25 @@ class NMT(nn.Module):
                 else:
                     rewards[i] = get_reward(tgt_sents[src_sent_id][1:-1],
                                                word2id(completed_samples[src_sent_id][sample_id][1:],
-                                                       self.vocab.tgt.id2word), reward_type)
-
-        rewards = Variable(torch.FloatTensor(rewards), requires_grad=False)
+                                                       self.vocab.tgt.id2word), reward_type, len(samples)-1)
+        # for e in rewards:
+        #     print(e)
+        #     print(len(samples)-1)
+        #     print(len(e))
+        if not 'delta' in reward_type:
+            rewards = Variable(torch.FloatTensor(rewards), requires_grad=False)
+        else:
+            new_rewards = []
+            for i in range(len(samples)-1):
+                tmp = []
+                for j in range(batch_size):
+                    if type(rewards[j]) is float:
+                        tmp.append(rewards[j])
+                    else:
+                        tmp.append(rewards[j][i])
+                
+                new_rewards.append(Variable(torch.FloatTensor(tmp), requires_grad=False))
+            rewards = new_rewards
         mask_sample = Variable(torch.FloatTensor(mask_sample), requires_grad=False)
         
         loss_b = []
@@ -538,8 +556,8 @@ class NMT(nn.Module):
             mask_t = mask_sample[i*batch_size:(i+1)*batch_size]
             prob_t = sample_losses[i]
 
-            #print(rewards.size())
-            #print(b_t.size())
+            # print(rewards.size())
+            # print(b_t.size())
             # print(prob_t.size())
             # neg_log_probs += prob_t
             # print("time step: ", i)
@@ -548,8 +566,12 @@ class NMT(nn.Module):
             # print(type(prob_t))
 
             b_t_detach = b_t.detach()
-            prob_t = (rewards - b_t_detach) * prob_t
-            b_t = (rewards - b_t).pow(2)
+            if not 'delta' in reward_type:
+                prob_t = (rewards - b_t_detach) * prob_t
+                b_t = (rewards - b_t).pow(2)
+            else:
+                prob_t = (rewards[i] - b_t_detach) * prob_t
+                b_t = (rewards[i] - b_t).pow(2)
 
             if 0.0 in mask_t.data:
                 prob_t = mask_t * prob_t
@@ -578,7 +600,11 @@ class NMT(nn.Module):
                 for e in completed_samples[i]:
                     print(' '.join(e))
         # print("mean reward: ", torch.mean(rewards))
-        return sum_loss_b, sum_prob_t, torch.mean(rewards)
+        if not 'delta' in reward_type:
+            mean_rewards = torch.mean(rewards)
+        else:
+            mean_rewards = np.array([torch.mean(r) for r in rewards]).mean()
+        return sum_loss_b, sum_prob_t, mean_rewards
 
     def attention(self, h_t, src_encoding, src_linear_for_att):
         # (1, batch_size, attention_size) + (src_sent_len, batch_size, attention_size) =>
