@@ -531,6 +531,8 @@ class NMT(nn.Module):
         #     print(len(e))
         if not 'delta' in reward_type:
             rewards = Variable(torch.FloatTensor(rewards), requires_grad=False)
+            if args.cuda:
+                rewards = rewards.cuda()
         else:
             new_rewards = []
             for i in range(len(samples)-1):
@@ -540,15 +542,16 @@ class NMT(nn.Module):
                         tmp.append(rewards[j])
                     else:
                         tmp.append(rewards[j][i])
-                
-                new_rewards.append(Variable(torch.FloatTensor(tmp), requires_grad=False))
+                var = Variable(torch.FloatTensor(tmp), requires_grad=False)
+                if args.cuda:
+                    var = var.cuda()
+                new_rewards.append(var)
             rewards = new_rewards
         mask_sample = Variable(torch.FloatTensor(mask_sample), requires_grad=False)
         
         loss_b = []
         loss_t = []
         if args.cuda:
-            rewards = rewards.cuda()
             mask_sample = mask_sample.cuda()
         # neg_log_probs = Variable(torch.zeros(batch_size), requires_grad=False)
         for i in range(len(samples)-1):
