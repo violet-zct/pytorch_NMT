@@ -538,8 +538,8 @@ class NMT(nn.Module):
             mask_t = mask_sample[i*batch_size:(i+1)*batch_size]
             prob_t = sample_losses[i]
 
-            print(rewards.size())
-            print(b_t.size())
+            #print(rewards.size())
+            #print(b_t.size())
             # print(prob_t.size())
             # neg_log_probs += prob_t
             # print("time step: ", i)
