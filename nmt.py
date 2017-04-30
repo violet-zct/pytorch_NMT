@@ -820,7 +820,7 @@ def get_bleu(references, hypotheses):
 
 
 def get_acc(references, hypotheses, acc_type='word'):
-    assert acc_type == 'word_acc' or acc_type == 'sent_acc'
+    assert acc_type == 'word_acc' or acc_type == 'sent_acc' or acc_type == 'f1'
     cum_acc = 0.
 
     for ref, hyp in zip(references, hypotheses):
@@ -828,8 +828,10 @@ def get_acc(references, hypotheses, acc_type='word'):
         hyp = hyp[1:-1]
         if acc_type == 'word_acc':
             acc = len([1 for ref_w, hyp_w in zip(ref, hyp) if ref_w == hyp_w]) / float(len(hyp) + 1e-6)
-        else:
+        elif acc_type == 'sent_acc':
             acc = 1. if all(ref_w == hyp_w for ref_w, hyp_w in zip(ref, hyp)) else 0.
+        elif acc_type == 'f1':
+            acc = calc_f1(ref, hyp)
         cum_acc += acc
 
     acc = cum_acc / len(hypotheses)
@@ -899,7 +901,8 @@ def test(args):
     bleu_score = get_bleu([tgt for src, tgt in test_data], top_hypotheses)
     word_acc = get_acc([tgt for src, tgt in test_data], top_hypotheses, 'word_acc')
     sent_acc = get_acc([tgt for src, tgt in test_data], top_hypotheses, 'sent_acc')
-    print('Corpus Level BLEU: %f, word level acc: %f, sentence level acc: %f' % (bleu_score, word_acc, sent_acc),
+    f1_acc = get_acc([tgt for src, tgt in test_data], top_hypotheses, 'f1')
+    print('Corpus Level BLEU: %f, word level acc: %f, sentence level acc: %f, f1 acc: %f' % (bleu_score, word_acc, sent_acc, f1_acc),
           file=sys.stderr)
 
     if args.save_to_file:
