@@ -61,7 +61,7 @@ def init_config():
     parser.add_argument('--lr', default=0.001, type=float, help='learning rate')
     parser.add_argument('--lr_decay', default=0.5, type=float, help='decay learning rate if the validation performance drops')
     parser.add_argument('--update_freq', default=1, type=int, help='update freq')
-    parser.add_argument('--reward_type', default='bleu', type=str, choices=['bleu', 'f1', 'combined'])
+    parser.add_argument('--reward_type', default='bleu', type=str, choices=['bleu', 'f1', 'combined','delta_f1'])
 
     # raml training
     # parser.add_argument('--temp', default=0.85, type=float, help='temperature in reward distribution')
@@ -103,6 +103,31 @@ def tensor_transform(linear, X):
     return linear(X.view(-1, X.size(2))).view(X.size(0), X.size(1), -1)
 
 
+def get_rl_reward(ref_sent, hyp_sent):
+    reward = []
+    prev_score = 0.
+    delta_scores = []
+    for l in xrange(1, len(hyp_sent) + 1):
+        partial_hyp = hyp_sent[:l]
+        y_t = hyp_sent[l - 1]
+        score = reward_func(ref_sent, partial_hyp)
+        # score = calc_bleu(ref_sent, partial_hyp, bp=False)
+        # score = calc_f1(ref_sent, partial_hyp)
+
+        delta_score = score - prev_score
+        delta_scores.append(delta_score)
+        prev_score = score
+
+    cum_reward = 0.
+    for i in reversed(xrange(len(hyp_sent))):
+        reward_i = delta_scores[i]
+        cum_reward += reward_i
+        reward.append(cum_reward)
+
+    reward = list(reversed(reward))
+
+    return reward
+
 def get_reward(tgt_sent, sample, reward='bleu'):
     sm = SmoothingFunction()
     if reward=='bleu':
@@ -111,6 +136,26 @@ def get_reward(tgt_sent, sample, reward='bleu'):
         score = calc_f1(tgt_sent, sample)
     elif reward == 'combined':
         score = sentence_bleu([tgt_sent], sample, smoothing_function=sm.method3) + calc_f1(tgt_sent, sample)
+    elif reward =='delta_f1':
+        score_list = []
+        prev_score = 0.
+        delta_scores = []
+        for l in xrange(1, len(sample) + 1):
+            partial_hyp = sample[:l]
+            y_t = sample[l - 1]
+            score = calc_f1(tgt_sent, partial_hyp)
+            delta_score = score - prev_score
+            delta_scores.append(delta_score)
+            prev_score = score
+
+        cum_reward = 0.
+        for i in reversed(xrange(len(sample))):
+            reward_i = delta_scores[i]
+            cum_reward += reward_i
+            score_list.append(cum_reward)
+
+        score_list = list(reversed(score_list))        
+        score = score_list
     return score
 
 
@@ -493,8 +538,8 @@ class NMT(nn.Module):
             mask_t = mask_sample[i*batch_size:(i+1)*batch_size]
             prob_t = sample_losses[i]
 
-            # print(rewards.size())
-            # print(b_t.size())
+            print(rewards.size())
+            print(b_t.size())
             # print(prob_t.size())
             # neg_log_probs += prob_t
             # print("time step: ", i)
@@ -707,7 +752,7 @@ def train(args):
                 cum_loss += word_loss_val
 
             elif args.model_type=='rl':
-                loss_b, loss_rl, avg_reward = model.sample_with_loss(src_sents, tgt_sents, args.sample_size, False)
+                loss_b, loss_rl, avg_reward = model.sample_with_loss(src_sents, tgt_sents, args.sample_size, False, reward_type=args.reward_type)
                 loss = loss_b + loss_rl
                 loss_val = loss.data[0]
                 reward_val = avg_reward.data[0]
