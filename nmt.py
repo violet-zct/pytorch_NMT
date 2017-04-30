@@ -11,7 +11,7 @@ from torch.nn import Parameter
 import torch.nn.functional as F
 from torch.nn.utils.rnn import pad_packed_sequence, pack_padded_sequence
 
-from nltk.translate.bleu_score import corpus_bleu, sentence_bleu
+from nltk.translate.bleu_score import corpus_bleu, sentence_bleu,SmoothingFunction
 import time
 import numpy as np
 from collections import defaultdict, Counter, namedtuple
@@ -104,12 +104,13 @@ def tensor_transform(linear, X):
 
 
 def get_reward(tgt_sent, sample, reward='bleu'):
+    sm = SmoothingFunction()
     if reward=='bleu':
-        score = sentence_bleu([tgt_sent], sample)
+        score = sentence_bleu([tgt_sent], sample, smoothing_function=sm.method3)
     elif reward == 'f1':
         score = calc_f1(tgt_sent, sample)
     elif reward == 'combined':
-        score = sentence_bleu([tgt_sent], sample) + calc_f1(tgt_sent, sample)
+        score = sentence_bleu([tgt_sent], sample, smoothing_function=sm.method3) + calc_f1(tgt_sent, sample)
     return score
 
 
