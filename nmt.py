@@ -879,7 +879,7 @@ def train(args):
                 else:
                     patience += 1
                     print('hit patience %d' % patience, file=sys.stderr)
-                    if patience == args.patience:
+                    if patience >= args.patience:
                         print('early stop!', file=sys.stderr)
                         print('the best model is from iteration [%d]' % best_model_iter, file=sys.stderr)
                         exit(0)
