@@ -166,7 +166,7 @@ class NMT(nn.Module):
         self.dropout = nn.Dropout(args.dropout)
 
         if args.model_type == "rl":
-            self.baseline = nn.Linear(args.hidden_size, 1, bias=True)
+            self.baseline = nn.Linear(args.hidden_size*2, 1, bias=True)
 
     def forward(self, src_sents, src_sents_len, tgt_words):
         src_encodings, init_ctx_vec = self.encode(src_sents, src_sents_len)
