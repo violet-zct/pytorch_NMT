@@ -709,7 +709,7 @@ class NMT(nn.Module):
                         else:
                             rewards[i] = get_reward(tgt_sents[src_sent_id][1:-1],
                                                 word2id(completed_samples[src_sent_id][sample_id][1:-1],
-                                                        self.vocab.tgt.id2word), reward_type,len(samples)-1)
+                                                        self.vocab.tgt.id2word), reward_type,len(samples))
         # if no <eos> is predicted, we still calculate rewards
         for i in range(batch_size):
             src_sent_id = i % src_sents_num
@@ -720,7 +720,7 @@ class NMT(nn.Module):
                 else:
                     rewards[i] = get_reward(tgt_sents[src_sent_id][1:-1],
                                                word2id(completed_samples[src_sent_id][sample_id][1:],
-                                                       self.vocab.tgt.id2word), reward_type, len(samples)-1)
+                                                       self.vocab.tgt.id2word), reward_type, len(samples))
         # for e in rewards:
         #     print(e)
         #     print(len(samples)-1)
