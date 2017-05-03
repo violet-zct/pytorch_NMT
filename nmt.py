@@ -149,7 +149,7 @@ class NMT(nn.Module):
         self.tgt_embed = nn.Embedding(len(vocab.tgt), args.embed_size, padding_idx=vocab.tgt['<pad>'])
 
         self.encoder_lstm = nn.LSTM(args.embed_size, args.hidden_size, bidirectional=True, dropout=args.dropout)
-        self.decoder_lstm = nn.LSTMCell(args.embed_size + args.hidden_size, args.hidden_size)
+        self.decoder_lstm = nn.LSTMCell(args.embed_size + args.hidden_size, args.hidden_size*2)
 
         # attention: dot product attention
         # project source encoding to decoder rnn's h space
