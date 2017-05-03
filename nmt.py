@@ -45,7 +45,7 @@ def init_config():
     parser.add_argument('--decode_max_time_step', default=200, type=int, help='maximum number of time steps used '
                                                                               'in decoding and sampling')
 
-    parser.add_argument('--model_type', default='ml', type=str, choices=['ml','rl'])
+    parser.add_argument('--model_type', default='ml', type=str, choices=['ml','rl', 'mixer'])
     parser.add_argument('--valid_niter', default=500, type=int, help='every n iterations to perform validation')
     parser.add_argument('--valid_metric', default='bleu', choices=['bleu', 'ppl', 'word_acc', 'sent_acc'], help='metric used for validation')
     parser.add_argument('--log_every', default=500, type=int, help='every n iterations to log training statistics')
@@ -63,6 +63,7 @@ def init_config():
     parser.add_argument('--update_freq', default=1, type=int, help='update freq')
     parser.add_argument('--reward_type', default='bleu', type=str, choices=['bleu', 'f1', 'combined','delta_f1'])
 
+    parser.add_argument('--delta_steps', default=2, type=int, help='annealing steps for using REINFROCE loss')
     # raml training
     # parser.add_argument('--temp', default=0.85, type=float, help='temperature in reward distribution')
     # parser.add_argument('--raml_sample_file', type=str, help='path to the sampled targets')
@@ -102,31 +103,6 @@ def tensor_transform(linear, X):
     # X is a 3D tensor
     return linear(X.view(-1, X.size(2))).view(X.size(0), X.size(1), -1)
 
-
-def get_rl_reward(ref_sent, hyp_sent):
-    reward = []
-    prev_score = 0.
-    delta_scores = []
-    for l in xrange(1, len(hyp_sent) + 1):
-        partial_hyp = hyp_sent[:l]
-        y_t = hyp_sent[l - 1]
-        score = reward_func(ref_sent, partial_hyp)
-        # score = calc_bleu(ref_sent, partial_hyp, bp=False)
-        # score = calc_f1(ref_sent, partial_hyp)
-
-        delta_score = score - prev_score
-        delta_scores.append(delta_score)
-        prev_score = score
-
-    cum_reward = 0.
-    for i in reversed(xrange(len(hyp_sent))):
-        reward_i = delta_scores[i]
-        cum_reward += reward_i
-        reward.append(cum_reward)
-
-    reward = list(reversed(reward))
-
-    return reward
 
 def get_reward(tgt_sent, sample, reward='bleu',max_len=0):
     sm = SmoothingFunction()
@@ -172,7 +148,7 @@ class NMT(nn.Module):
         self.src_embed = nn.Embedding(len(vocab.src), args.embed_size, padding_idx=vocab.src['<pad>'])
         self.tgt_embed = nn.Embedding(len(vocab.tgt), args.embed_size, padding_idx=vocab.tgt['<pad>'])
 
-        self.encoder_lstm = nn.LSTM(args.embed_size, args.hidden_size / 2, bidirectional=True, dropout=args.dropout)
+        self.encoder_lstm = nn.LSTM(args.embed_size, args.hidden_size, bidirectional=True, dropout=args.dropout)
         self.decoder_lstm = nn.LSTMCell(args.embed_size + args.hidden_size, args.hidden_size)
 
         # attention: dot product attention
@@ -398,6 +374,228 @@ class NMT(nn.Module):
 
         return [hyp for hyp, score in ranked_hypotheses]
 
+    def mixer(self, src_encoding, dec_init_vec, tgt_sents_var, delta, tgt_sents_tokens, cross_entropy_loss, reward_type, to_word=False):
+        """
+        :param src_encoding: (src_sent_len, batch_size, hidden_size)
+        :param dec_init_vec: (batch_size, hidden_size)
+        :param tgt_sents: (tgt_sent_len, batch_size)
+        :return:
+        """
+
+        # mixer is called when delta < T
+        # tgt_sents: 0 : -(delta+2)
+        # ref_tgt_sents: 1: -(delta+1)
+        init_state = dec_init_vec[0]
+        init_cell = dec_init_vec[1]
+        hidden = (init_state, init_cell)
+
+        new_tensor = init_cell.data.new
+        batch_size = src_encoding.size(1)
+
+        # (batch_size, src_sent_len, hidden_size)
+        src_encoding = src_encoding.t()
+        # initialize attentional vector
+        att_tm1 = Variable(new_tensor(batch_size, self.args.hidden_size).zero_(), requires_grad=False)
+
+        tgt_word_embed = self.tgt_embed(tgt_sents_var[:-(delta+2)])
+        scores = []
+
+        max_len = tgt_sents_var.size(0)
+        CE_length = max_len - delta
+        print("Maximum length and CE length and CE embedding length: ", max_len, CE_length, tgt_word_embed.size(0))
+        # TODO: start from `<s>`, until y_{T-delta}
+        for y_tm1_embed in tgt_word_embed.split(split_size=1):
+            # input feeding: concate y_tm1 and previous attentional vector
+            x = torch.cat([y_tm1_embed.squeeze(0), att_tm1], 1)
+
+            # h_t: (batch_size, hidden_size)
+            h_t, cell_t = self.decoder_lstm(x, hidden)
+            h_t = self.dropout(h_t)
+
+            ctx_t, alpha_t = self.dot_prod_attention(h_t, src_encoding)
+
+            att_t = F.tanh(self.att_vec_linear(torch.cat([h_t, ctx_t], 1)))  # E.q. (5)
+            att_t = self.dropout(att_t)
+
+            score_t = self.readout(att_t)  # E.q. (6)
+            scores.append(score_t)
+
+            att_tm1 = att_t
+            hidden = h_t, cell_t
+
+        scores = torch.stack(scores)  # T-delta, batch_size, voc_size
+        word_loss = cross_entropy_loss(scores.view(-1, scores.size(2)), tgt_sents_var[1:-(delta+1)].view(-1))
+        ce_loss = word_loss / batch_size
+
+        eos = self.vocab.tgt['</s>']
+        if args.cuda:
+            sample_ends = torch.cuda.ByteTensor([0] * batch_size)
+            all_ones = torch.cuda.ByteTensor([1] * batch_size)
+        else:
+            sample_ends = torch.ByteTensor([0] * batch_size)
+            all_ones = torch.ByteTensor([1] * batch_size)
+        offset = torch.mul(torch.range(0, batch_size - 1), len(self.vocab.tgt)).long()
+
+        p_t = F.softmax(score_t)
+        y_t = torch.multinomial(p_t, num_samples=1).squeeze(1)
+        y_t = y_t.detach()
+
+        samples = [y_t]
+        baselines = []
+        sample_losses = []
+        epsilon = Variable(torch.ones(batch_size * len(self.vocab.tgt)) * 1e-20, requires_grad=False)
+
+        t = tgt_word_embed.size(0) - 1
+        while t < args.decode_max_time_step:
+            t += 1
+
+            # (sample_size)
+            y_tm1 = samples[-1]
+
+            y_tm1_embed = self.tgt_embed(y_tm1)
+
+            x = torch.cat([y_tm1_embed, att_tm1], 1)
+
+            # h_t: (batch_size, hidden_size)
+            h_t, cell_t = self.decoder_lstm(x, hidden)
+            h_t = self.dropout(h_t)
+
+            ctx_t, alpha_t = self.dot_prod_attention(h_t, src_encoding)
+
+            att_t = F.tanh(self.att_vec_linear(torch.cat([h_t, ctx_t], 1)))  # E.q. (5)
+            att_t = self.dropout(att_t)
+
+            score_t = self.readout(att_t)  # E.q. (6)
+            p_t = F.softmax(score_t)
+
+            detach_h_t = h_t.detach()
+            baselines.append(self.baseline(detach_h_t).squeeze(1))
+
+            y_t = torch.multinomial(p_t, num_samples=1).squeeze(1)
+            y_t = y_t.detach()
+
+            y_t_offset = y_t.data + offset
+
+            samples.append(y_t)
+            p_t = p_t.view(-1)
+            p_t = -torch.log(p_t + epsilon)
+            sample_losses.append(p_t[y_t_offset])
+
+            sample_ends |= torch.eq(y_t, eos).byte().data
+            if torch.equal(sample_ends, all_ones):
+                break
+
+            att_tm1 = att_t
+            hidden = h_t, cell_t
+
+        # transpose tgt_sents_var to batch_size, max_len
+        t_tgt_sents_var = torch.transpose(tgt_sents_var[:-(delta + 2)], 0, 1)
+        print("batch_size and len of CE: ", t_tgt_sents_var.size())
+
+        incomplete_ground_truth = [t.view(-1) for t in tgt_sents_var[:-(delta + 2)]]
+
+        '''The following line is because: the T-s steps might have already included the <eos> token,
+         in this case no RL loss follows.'''
+        samples = incomplete_ground_truth + samples
+        completed_samples = [list]*batch_size
+        rewards = [-1] * batch_size
+        mask_samples = [list]*len(samples)
+        print("tot len: ", len(samples))
+        for j, y_t in enumerate(samples):
+            # iterate over batch_size
+            for i, sample_word in enumerate(y_t.cpu().data):
+                if (len(completed_samples[i]) == 0 or completed_samples[i][-1] != eos) and rewards[i] == -1:
+                    completed_samples[i].append(sample_word)
+                    mask_samples[j].append(1.0)
+                else:
+                    mask_samples[j].append(0.0)
+                    if rewards[i] == -1:
+                        if len(completed_samples[i]) == 2:
+                            rewards[i] = 0.0
+                        else:
+                            rewards[i] = get_reward(tgt_sents_tokens[i][1:-1], word2id(completed_samples[i][1:-1],
+                                                    self.vocab.tgt.id2word), reward_type, len(samples)-1)
+
+        # Clean up: if no <eos> is predicted, we still calculate rewards
+        for i in range(batch_size):
+            if rewards[i] == -1:
+                if len(completed_samples[i]) == 1:
+                    rewards[i] = 0.0
+                else:
+                    rewards[i] = get_reward(tgt_sents_tokens[i][1:-1],
+                                               word2id(completed_samples[i][1:],
+                                                       self.vocab.tgt.id2word), reward_type, len(samples)-1)
+
+        if not 'delta' in reward_type:
+            rewards = Variable(torch.FloatTensor(rewards), requires_grad=False)
+            if args.cuda:
+                rewards = rewards.cuda()
+        else:
+            new_rewards = []
+            for i in range(1, len(samples)):
+                tmp = []
+                for j in range(batch_size):
+                    if type(rewards[j]) is float:
+                        tmp.append(rewards[j])
+                    else:
+                        tmp.append(rewards[j][i])
+                var = Variable(torch.FloatTensor(tmp), requires_grad=False)
+                if args.cuda:
+                    var = var.cuda()
+                new_rewards.append(var)
+            rewards = new_rewards
+        mask_samples = Variable(torch.FloatTensor(mask_samples), requires_grad=False)
+
+        loss_b = []
+        loss_t = []
+        if args.cuda:
+            mask_samples = mask_samples.cuda()
+        len_CE = len(incomplete_ground_truth)
+        mask_sum = 0.0
+        for i in range(len(samples) - 1):
+            if i < len_CE:
+                continue
+            sample_ind = i - len_CE
+            b_t = baselines[sample_ind]
+            mask_t = mask_samples[i+1] # Caution here!
+            prob_t = sample_losses[sample_ind]
+
+            b_t_detach = b_t.detach()
+            if not 'delta' in reward_type:
+                prob_t = (rewards - b_t_detach) * prob_t
+                b_t = (rewards - b_t).pow(2)
+            else:
+                prob_t = (rewards[sample_ind] - b_t_detach) * prob_t
+                b_t = (rewards[sample_ind] - b_t).pow(2)
+
+            mask_sum += sum(mask_t.data)
+            if 0.0 in mask_t.data:
+                prob_t = mask_t * prob_t
+                b_t = mask_t * b_t
+
+            loss_b.append(b_t)
+            loss_t.append(prob_t)
+
+            # print("rewards: ", rewards)
+        loss_b = torch.cat(loss_b, 0)  # max_len, batch_size
+        prob_t = torch.cat(loss_t, 0)
+        # print("before sum loss b: ", loss_b)
+        # print("before sum prob: ", prob_t)
+        sum_loss_b = torch.sum(loss_b) / mask_sum
+        sum_prob_t = torch.sum(prob_t) / batch_size
+
+        if to_word:
+            for i, src_sent_samples in enumerate(completed_samples):
+                print("Ground truth: ", ' '.join(tgt_sents_tokens[i]))
+                completed_samples[i] = word2id(src_sent_samples, self.vocab.tgt.id2word)
+                print(' '.join(completed_samples[i]))
+        if not 'delta' in reward_type:
+            mean_rewards = torch.mean(rewards)
+        else:
+            mean_rewards = np.array([torch.mean(r) for r in rewards]).mean()
+
+        return ce_loss, sum_loss_b, sum_prob_t, mean_rewards
+
     def sample_with_loss(self, src_sents, tgt_sents, sample_size=None, to_word=False, reward_type="bleu"):
         if not type(src_sents[0]) == list:
             src_sents = [src_sents]
@@ -512,8 +710,6 @@ class NMT(nn.Module):
                             rewards[i] = get_reward(tgt_sents[src_sent_id][1:-1],
                                                 word2id(completed_samples[src_sent_id][sample_id][1:-1],
                                                         self.vocab.tgt.id2word), reward_type,len(samples)-1)
-                # if j == len(samples) - 1:
-                #     rewards.append(get_reward(tgt_sents[src_sent_id], completed_samples[src_sent_id][sample_id][1:-1], reward_type))
         # if no <eos> is predicted, we still calculate rewards
         for i in range(batch_size):
             src_sent_id = i % src_sents_num
@@ -535,7 +731,8 @@ class NMT(nn.Module):
                 rewards = rewards.cuda()
         else:
             new_rewards = []
-            for i in range(len(samples)-1):
+            # FIXME: change here, because delta rewards should be received from the first sampling token, which should match with b_t and p_t
+            for i in range(1, len(samples)):
                 tmp = []
                 for j in range(batch_size):
                     if type(rewards[j]) is float:
@@ -547,8 +744,11 @@ class NMT(nn.Module):
                     var = var.cuda()
                 new_rewards.append(var)
             rewards = new_rewards
+
         mask_sample = Variable(torch.FloatTensor(mask_sample), requires_grad=False)
-        
+
+        # len(baselines) = len(mask_sample)/batch_size - 1
+        # print("Check baseline len and mask len: ", len(baselines), len(mask_sample)/batch_size)
         loss_b = []
         loss_t = []
         if args.cuda:
@@ -556,7 +756,8 @@ class NMT(nn.Module):
         # neg_log_probs = Variable(torch.zeros(batch_size), requires_grad=False)
         for i in range(len(samples)-1):
             b_t = baselines[i]
-            mask_t = mask_sample[i*batch_size:(i+1)*batch_size]
+            # FIXme: the correct index of mask_t
+            mask_t = mask_sample[(i+1)*batch_size:(i+2)*batch_size]
             prob_t = sample_losses[i]
 
             # print(rewards.size())
@@ -759,6 +960,7 @@ def train(args):
         for src_sents, tgt_sents in data_iter(train_data, batch_size=args.batch_size):
             train_iter += 1
 
+            # sent_len, voc_size
             src_sents_var = to_input_variable(src_sents, vocab.src, cuda=args.cuda)
             tgt_sents_var = to_input_variable(tgt_sents, vocab.tgt, cuda=args.cuda)
 
@@ -766,11 +968,7 @@ def train(args):
             src_sents_len = [len(s) for s in src_sents]
             pred_tgt_word_num = sum(len(s[1:]) for s in tgt_sents) # omitting leading `<s>`
 
-
-            
-
-
-            if args.model_type=='ml':
+            if args.model_type == 'ml':
             # (tgt_sent_len, batch_size, tgt_vocab_size)
                 scores = model(src_sents_var, src_sents_len, tgt_sents_var[:-1])
                 word_loss = cross_entropy_loss(scores.view(-1, scores.size(2)), tgt_sents_var[1:].view(-1))
@@ -780,7 +978,7 @@ def train(args):
                 report_loss += word_loss_val
                 cum_loss += word_loss_val
 
-            elif args.model_type=='rl':
+            elif args.model_type == 'rl':
                 loss_b, loss_rl, avg_reward = model.sample_with_loss(src_sents, tgt_sents, args.sample_size, False, reward_type=args.reward_type)
                 loss = loss_b + loss_rl
                 loss_val = loss.data[0]
@@ -788,6 +986,9 @@ def train(args):
                 report_loss += loss_val * batch_size
                 cum_loss += loss_val * batch_size
                 total_loss_baseline += loss_b.data[0]*batch_size
+
+            elif args.model_type == 'mixer':
+                pass
 
             loss.backward()
             # clip gradient
