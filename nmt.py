@@ -153,11 +153,11 @@ class NMT(nn.Module):
 
         # attention: dot product attention
         # project source encoding to decoder rnn's h space
-        self.att_src_linear = nn.Linear(args.hidden_size, args.hidden_size, bias=False)
+        self.att_src_linear = nn.Linear(args.hidden_size*2, args.hidden_size*2, bias=False)
 
         # transformation of decoder hidden states and context vectors before reading out target words
         # this produces the `attentional vector` in (Luong et al., 2015)
-        self.att_vec_linear = nn.Linear(args.hidden_size * 2, args.hidden_size, bias=False)
+        self.att_vec_linear = nn.Linear(args.hidden_size * 4, args.hidden_size, bias=False)
 
         # prediction layer of the target vocabulary
         self.readout = nn.Linear(args.hidden_size, len(vocab.tgt), bias=False)
