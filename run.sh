@@ -7,7 +7,7 @@ python nmt.py \
     --test_src ./en-de/test.en-de.low.de \
     --test_tgt ./en-de/test.en-de.low.en \
     --vocab ./vocab.bin \
-    --model_type rl \
+    --model_type mixer \
     --sample_size 5 \
     --reward_type "bleu" \
     --valid_niter 1000 \

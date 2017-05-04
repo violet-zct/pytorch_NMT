@@ -150,7 +150,7 @@ class NMT(nn.Module):
         self.tgt_embed = nn.Embedding(len(vocab.tgt), args.embed_size, padding_idx=vocab.tgt['<pad>'])
 
         self.encoder_lstm = nn.LSTM(args.embed_size, args.hidden_size, bidirectional=True, dropout=args.dropout)
-        self.decoder_lstm = nn.LSTMCell(args.embed_size + args.hidden_size, args.hidden_size)
+        self.decoder_lstm = nn.LSTMCell(args.embed_size + args.hidden_size, args.hidden_size*2)
 
         # attention: dot product attention
         # project source encoding to decoder rnn's h space
@@ -167,7 +167,7 @@ class NMT(nn.Module):
         self.dropout = nn.Dropout(args.dropout)
 
         if args.model_type == "rl":
-            self.baseline = nn.Linear(args.hidden_size, 1, bias=True)
+            self.baseline = nn.Linear(args.hidden_size*2, 1, bias=True)
 
     def forward(self, src_sents, src_sents_len, tgt_words):
         src_encodings, init_ctx_vec = self.encode(src_sents, src_sents_len)
@@ -713,7 +713,7 @@ class NMT(nn.Module):
                         else:
                             rewards[i] = get_reward(tgt_sents[src_sent_id][1:-1],
                                                 word2id(completed_samples[src_sent_id][sample_id][1:-1],
-                                                        self.vocab.tgt.id2word), reward_type,len(samples)-1)
+                                                        self.vocab.tgt.id2word), reward_type,len(samples))
         # if no <eos> is predicted, we still calculate rewards
         for i in range(batch_size):
             src_sent_id = i % src_sents_num
@@ -724,7 +724,7 @@ class NMT(nn.Module):
                 else:
                     rewards[i] = get_reward(tgt_sents[src_sent_id][1:-1],
                                                word2id(completed_samples[src_sent_id][sample_id][1:],
-                                                       self.vocab.tgt.id2word), reward_type, len(samples)-1)
+                                                       self.vocab.tgt.id2word), reward_type, len(samples))
         # for e in rewards:
         #     print(e)
         #     print(len(samples)-1)
@@ -1192,7 +1192,7 @@ def test(args):
     if args.cuda:
         model = model.cuda()
 
-    hypotheses = decode(model, test_data)
+    hypotheses = decode(model, test_data,False)
     top_hypotheses = [hyps[0] for hyps in hypotheses]
 
     bleu_score = get_bleu([tgt for src, tgt in test_data], top_hypotheses)
