@@ -54,7 +54,7 @@ def init_config():
     parser.add_argument('--save_model_after', default=2, help='save the model only after n validation iterations')
     parser.add_argument('--save_to_file', default=None, type=str, help='if provided, save decoding results to file')
     parser.add_argument('--save_nbest', default=False, action='store_true', help='save nbest decoding results')
-    parser.add_argument('--patience', default=5, type=int, help='training patience')
+    parser.add_argument('--patience', default=30, type=int, help='training patience')
     parser.add_argument('--uniform_init', default=None, type=float, help='if specified, use uniform initialization for all parameters')
     parser.add_argument('--clip_grad', default=5., type=float, help='clip gradients')
     parser.add_argument('--max_niter', default=-1, type=int, help='maximum number of training iterations')
@@ -63,7 +63,8 @@ def init_config():
     parser.add_argument('--update_freq', default=1, type=int, help='update freq')
     parser.add_argument('--reward_type', default='bleu', type=str, choices=['bleu', 'f1', 'combined','delta_f1'])
 
-    parser.add_argument('--delta_steps', default=2, type=int, help='annealing steps for using REINFROCE loss')
+    parser.add_argument('--delta_steps', default=3, type=int, help='MIXER: annealing steps for using REINFROCE loss')
+    parser.add_argument('--XER', default=5, )
     # raml training
     # parser.add_argument('--temp', default=0.85, type=float, help='temperature in reward distribution')
     # parser.add_argument('--raml_sample_file', type=str, help='path to the sampled targets')
@@ -153,11 +154,11 @@ class NMT(nn.Module):
 
         # attention: dot product attention
         # project source encoding to decoder rnn's h space
-        self.att_src_linear = nn.Linear(args.hidden_size, args.hidden_size, bias=False)
+        self.att_src_linear = nn.Linear(args.hidden_size * 2, args.hidden_size, bias=False)
 
         # transformation of decoder hidden states and context vectors before reading out target words
         # this produces the `attentional vector` in (Luong et al., 2015)
-        self.att_vec_linear = nn.Linear(args.hidden_size * 2, args.hidden_size, bias=False)
+        self.att_vec_linear = nn.Linear(args.hidden_size * 3, args.hidden_size, bias=False)
 
         # prediction layer of the target vocabulary
         self.readout = nn.Linear(args.hidden_size, len(vocab.tgt), bias=False)
@@ -195,7 +196,10 @@ class NMT(nn.Module):
             if isinstance(param, Parameter):
                 # backwards compatibility for serialized parameters
                 param = param.data
+            print("Copying %", name)
+            print(own_state[name].size(), param.size())
             own_state[name].copy_(param)
+
 
         missing = set(own_state.keys()) - set(state_dict.keys())
         if len(missing) == 2:
@@ -557,7 +561,7 @@ class NMT(nn.Module):
                 continue
             sample_ind = i - len_CE
             b_t = baselines[sample_ind]
-            mask_t = mask_samples[i+1] # Caution here!
+            mask_t = mask_samples[i+1]  # Caution here!
             prob_t = sample_losses[sample_ind]
 
             b_t_detach = b_t.detach()
@@ -894,7 +898,7 @@ def evaluate_loss(model, data, crit):
 def init_training(args):
     vocab = torch.load(args.vocab)
 
-    if args.model_type == "rl":
+    if args.model_type == "rl" or args.model_type == "mixer":
         assert args.load_model is not None, "Path to pretrained model is not provided!!"
         print('load model from [%s] for RL training' % args.load_model, file=sys.stderr)
         params = torch.load(args.load_model, map_location=lambda storage, loc: storage)
@@ -946,6 +950,7 @@ def train(args):
 
     train_iter = patience = cum_loss = report_loss = cum_tgt_words = report_tgt_words = 0
     cum_examples = cum_batches = report_examples = epoch = valid_num = best_model_iter = 0
+    delta = args.delta_steps
     hist_valid_scores = []
     train_time = begin_time = time.time()
     reward_val = 0.
@@ -966,6 +971,7 @@ def train(args):
 
             batch_size = len(src_sents)
             src_sents_len = [len(s) for s in src_sents]
+            tgt_sents_len = [len(s) for s in tgt_sents]
             pred_tgt_word_num = sum(len(s[1:]) for s in tgt_sents) # omitting leading `<s>`
 
             if args.model_type == 'ml':
@@ -988,7 +994,23 @@ def train(args):
                 total_loss_baseline += loss_b.data[0]*batch_size
 
             elif args.model_type == 'mixer':
-                pass
+                if epoch % args.XER == 0:
+                    delta += delta
+                max_len = max(tgt_sents_len)
+                if delta >= max_len - 1:
+                    loss_b, loss_rl, avg_reward = model.sample_with_loss(src_sents, tgt_sents, args.sample_size, False,
+                                                                         reward_type=args.reward_type)
+                    loss = loss_b + loss_rl
+                else:
+                    src_encodings, init_ctx_vec = model.encode(src_sents, src_sents_len)
+                    ce_loss, loss_b, loss_rl, avg_rewards = model.mixer(src_encodings, init_ctx_vec, tgt_sents_var,
+                                                                            delta, tgt_sents, cross_entropy_loss, args.reward_type, True)
+                    loss = ce_loss + loss_b + loss_rl
+                loss_val = loss.data[0]
+                reward_val = avg_reward.data[0]
+                report_loss += loss_val * batch_size
+                cum_loss += loss_val * batch_size
+                total_loss_baseline += loss_b.data[0] * batch_size
 
             loss.backward()
             # clip gradient
