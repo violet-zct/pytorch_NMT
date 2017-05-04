@@ -102,7 +102,7 @@ def word2id(sents, vocab):
 
 def tensor_transform(linear, X):
     # X is a 3D tensor
-    return linear(X.view(-1, X.size(2))).view(X.size(0), X.size(1), -1)
+    return linear(X.contiguous().view(-1, X.size(2))).view(X.size(0), X.size(1), -1)
 
 
 def get_reward(tgt_sent, sample, reward='bleu',max_len=0):
@@ -150,7 +150,7 @@ class NMT(nn.Module):
         self.tgt_embed = nn.Embedding(len(vocab.tgt), args.embed_size, padding_idx=vocab.tgt['<pad>'])
 
         self.encoder_lstm = nn.LSTM(args.embed_size, args.hidden_size, bidirectional=True, dropout=args.dropout)
-        self.decoder_lstm = nn.LSTMCell(args.embed_size + args.hidden_size, args.hidden_size*2)
+        self.decoder_lstm = nn.LSTMCell(args.embed_size + args.hidden_size, args.hidden_size)
 
         # attention: dot product attention
         # project source encoding to decoder rnn's h space
@@ -165,6 +165,9 @@ class NMT(nn.Module):
 
         # dropout layer
         self.dropout = nn.Dropout(args.dropout)
+
+        # initialize the decoder's state and cells with encoder hidden states
+        self.decoder_cell_init = nn.Linear(args.hidden_size * 2, args.hidden_size)
 
         if args.model_type == "rl":
             self.baseline = nn.Linear(args.hidden_size*2, 1, bias=True)
@@ -220,11 +223,11 @@ class NMT(nn.Module):
         output, (last_state, last_cell) = self.encoder_lstm(packed_src_embed)
         output, _ = pad_packed_sequence(output)
 
-        dec_init_state = torch.cat([last_state[0], last_state[1]], 1)
-        dec_init_cell = torch.cat([last_cell[0], last_cell[1]], 1)
+        dec_init_cell = self.decoder_cell_init(torch.cat([last_cell[0], last_cell[1]], 1))
+        dec_init_state = F.tanh(dec_init_cell)
 
         return output, (dec_init_state, dec_init_cell)
-
+    
     def decode(self, src_encoding, dec_init_vec, tgt_sents):
         """
         :param src_encoding: (src_sent_len, batch_size, hidden_size)
@@ -241,6 +244,8 @@ class NMT(nn.Module):
 
         # (batch_size, src_sent_len, hidden_size)
         src_encoding = src_encoding.t()
+        # (batch_size, src_sent_len, hidden_size)
+        src_encoding_att_linear = tensor_transform(self.att_src_linear, src_encoding)
         # initialize attentional vector
         att_tm1 = Variable(new_tensor(batch_size, self.args.hidden_size).zero_(), requires_grad=False)
 
@@ -256,7 +261,7 @@ class NMT(nn.Module):
             h_t, cell_t = self.decoder_lstm(x, hidden)
             h_t = self.dropout(h_t)
 
-            ctx_t, alpha_t = self.dot_prod_attention(h_t, src_encoding)
+            ctx_t, alpha_t = self.dot_prod_attention(h_t, src_encoding, src_encoding_att_linear)
 
             att_t = F.tanh(self.att_vec_linear(torch.cat([h_t, ctx_t], 1)))   # E.q. (5)
             att_t = self.dropout(att_t)
