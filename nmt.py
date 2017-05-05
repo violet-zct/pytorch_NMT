@@ -460,6 +460,10 @@ class NMT(nn.Module):
         sample_losses = []
         epsilon = Variable(torch.ones(batch_size * len(self.vocab.tgt)) * 1e-20, requires_grad=False)
 
+        if args.cuda:
+            epsilon = epsilon.cuda()
+            offset = offset.cuda()
+            
         t = tgt_word_embed.size(0) - 1
         while t < args.decode_max_time_step:
             t += 1
