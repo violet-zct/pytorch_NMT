@@ -63,8 +63,9 @@ def init_config():
     parser.add_argument('--update_freq', default=1, type=int, help='update freq')
     parser.add_argument('--reward_type', default='bleu', type=str, choices=['bleu', 'f1', 'combined','delta_f1'])
 
+    parser.add_argument('--run_with_no_patience', default=10, type=int, help="If patience hit within these many first epochs, reset patience=0.")
     parser.add_argument('--delta_steps', default=3, type=int, help='MIXER: annealing steps for using REINFROCE loss')
-    parser.add_argument('--XER', default=5, )
+    parser.add_argument('--XER', default=2, type=int, help='Every XER epoches, decrease delta by delta.' )
     # raml training
     # parser.add_argument('--temp', default=0.85, type=float, help='temperature in reward distribution')
     # parser.add_argument('--raml_sample_file', type=str, help='path to the sampled targets')
@@ -169,8 +170,8 @@ class NMT(nn.Module):
         # initialize the decoder's state and cells with encoder hidden states
         self.decoder_cell_init = nn.Linear(args.hidden_size * 2, args.hidden_size)
 
-        if args.model_type == "rl":
-            self.baseline = nn.Linear(args.hidden_size*2, 1, bias=True)
+        if args.model_type == "rl" or args.model_type == "mixer":
+            self.baseline = nn.Linear(args.hidden_size, 1, bias=True)
 
     def forward(self, src_sents, src_sents_len, tgt_words):
         src_encodings, init_ctx_vec = self.encode(src_sents, src_sents_len)
@@ -199,8 +200,8 @@ class NMT(nn.Module):
             if isinstance(param, Parameter):
                 # backwards compatibility for serialized parameters
                 param = param.data
-            print("Copying %", name)
-            print(own_state[name].size(), param.size())
+            # print("Copying %", name)
+            # print(own_state[name].size(), param.size())
             own_state[name].copy_(param)
 
 
@@ -227,7 +228,7 @@ class NMT(nn.Module):
         dec_init_state = F.tanh(dec_init_cell)
 
         return output, (dec_init_state, dec_init_cell)
-    
+
     def decode(self, src_encoding, dec_init_vec, tgt_sents):
         """
         :param src_encoding: (src_sent_len, batch_size, hidden_size)
@@ -411,12 +412,12 @@ class NMT(nn.Module):
         # initialize attentional vector
         att_tm1 = Variable(new_tensor(batch_size, self.args.hidden_size).zero_(), requires_grad=False)
 
-        tgt_word_embed = self.tgt_embed(tgt_sents_var[:-(delta+2)])
+        tgt_word_embed = self.tgt_embed(tgt_sents_var[:-(delta+1)])
         scores = []
 
         max_len = tgt_sents_var.size(0)
         CE_length = max_len - delta
-        print("Maximum length and CE length and CE embedding length: ", max_len, CE_length, tgt_word_embed.size(0))
+        # print("Maximum length and CE length and CE embedding length: ", max_len, CE_length, tgt_word_embed.size(0))
         # TODO: start from `<s>`, until y_{T-delta}
         for y_tm1_embed in tgt_word_embed.split(split_size=1):
             # input feeding: concate y_tm1 and previous attentional vector
@@ -437,8 +438,8 @@ class NMT(nn.Module):
             att_tm1 = att_t
             hidden = h_t, cell_t
 
-        scores = torch.stack(scores)  # T-delta, batch_size, voc_size
-        word_loss = cross_entropy_loss(scores.view(-1, scores.size(2)), tgt_sents_var[1:-(delta+1)].view(-1))
+        scores = torch.stack(scores)  # T-delta-1, batch_size, voc_size
+        word_loss = cross_entropy_loss(scores.view(-1, scores.size(2)), tgt_sents_var[1:-delta].view(-1))
         ce_loss = word_loss / batch_size
 
         eos = self.vocab.tgt['</s>']
@@ -503,20 +504,22 @@ class NMT(nn.Module):
             hidden = h_t, cell_t
 
         # transpose tgt_sents_var to batch_size, max_len
-        t_tgt_sents_var = torch.transpose(tgt_sents_var[:-(delta + 2)], 0, 1)
-        print("batch_size and len of CE: ", t_tgt_sents_var.size())
+        # t_tgt_sents_var = torch.transpose(tgt_sents_var[:-(delta + 1)], 0, 1)
+        # print("batch_size and len of CE: ", t_tgt_sents_var.size())
 
-        incomplete_ground_truth = [t.view(-1) for t in tgt_sents_var[:-(delta + 2)]]
-
+        incomplete_ground_truth = [t.view(-1) for t in tgt_sents_var[:-delta]]
+        # for ss in incomplete_ground_truth:
+        #     print(ss.size())
         '''The following line is because: the T-s steps might have already included the <eos> token,
          in this case no RL loss follows.'''
         samples = incomplete_ground_truth + samples
-        completed_samples = [list]*batch_size
+        completed_samples = [list() for _ in range(batch_size)]
         rewards = [-1] * batch_size
-        mask_samples = [list]*len(samples)
-        print("tot len: ", len(samples))
+        mask_samples = [list() for _ in range(len(samples))]
+        # print("tot len: ", len(samples))
         for j, y_t in enumerate(samples):
             # iterate over batch_size
+            # print(y_t.size())
             for i, sample_word in enumerate(y_t.cpu().data):
                 if (len(completed_samples[i]) == 0 or completed_samples[i][-1] != eos) and rewards[i] == -1:
                     completed_samples[i].append(sample_word)
@@ -564,7 +567,9 @@ class NMT(nn.Module):
         loss_t = []
         if args.cuda:
             mask_samples = mask_samples.cuda()
+        # print("mask_samples size: ", mask_samples.size())
         len_CE = len(incomplete_ground_truth)
+        # print("len_ce: ", len_CE)
         mask_sum = 0.0
         for i in range(len(samples) - 1):
             if i < len_CE:
@@ -584,6 +589,7 @@ class NMT(nn.Module):
 
             mask_sum += sum(mask_t.data)
             if 0.0 in mask_t.data:
+                # print("mask and prob size: ", mask_t.size(), prob_t.size())
                 prob_t = mask_t * prob_t
                 b_t = mask_t * b_t
 
@@ -1009,13 +1015,14 @@ def train(args):
                     delta += delta
                 max_len = max(tgt_sents_len)
                 if delta >= max_len - 1:
+                    # Totally switch to RL training
                     loss_b, loss_rl, avg_reward = model.sample_with_loss(src_sents, tgt_sents, args.sample_size, False,
                                                                          reward_type=args.reward_type)
                     loss = loss_b + loss_rl
                 else:
-                    src_encodings, init_ctx_vec = model.encode(src_sents, src_sents_len)
-                    ce_loss, loss_b, loss_rl, avg_rewards = model.mixer(src_encodings, init_ctx_vec, tgt_sents_var,
-                                                                            delta, tgt_sents, cross_entropy_loss, args.reward_type, True)
+                    src_encodings, init_ctx_vec = model.encode(src_sents_var, src_sents_len)
+                    ce_loss, loss_b, loss_rl, avg_reward = model.mixer(src_encodings, init_ctx_vec, tgt_sents_var,
+                                                                            delta, tgt_sents, cross_entropy_loss, args.reward_type, False)
                     loss = ce_loss + loss_b + loss_rl
                 loss_val = loss.data[0]
                 reward_val = avg_reward.data[0]
@@ -1113,6 +1120,8 @@ def train(args):
                 else:
                     patience += 1
                     print('hit patience %d' % patience, file=sys.stderr)
+                    if epoch <= args.run_with_no_patience:
+                        patience = 0
                     if patience >= args.patience:
                         print('early stop!', file=sys.stderr)
                         print('the best model is from iteration [%d]' % best_model_iter, file=sys.stderr)
