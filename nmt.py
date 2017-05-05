@@ -488,7 +488,7 @@ class NMT(nn.Module):
 
             y_t = torch.multinomial(p_t, num_samples=1).squeeze(1)
             y_t = y_t.detach()
-
+            
             y_t_offset = y_t.data + offset
 
             samples.append(y_t)
