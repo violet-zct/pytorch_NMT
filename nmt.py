@@ -451,11 +451,11 @@ class NMT(nn.Module):
             all_ones = torch.ByteTensor([1] * batch_size)
         offset = torch.mul(torch.range(0, batch_size - 1), len(self.vocab.tgt)).long()
 
-        p_t = F.softmax(score_t)
-        y_t = torch.multinomial(p_t, num_samples=1).squeeze(1)
-        y_t = y_t.detach()
-
-        samples = [y_t]
+        # p_t = F.softmax(score_t)
+        # y_t = torch.multinomial(p_t, num_samples=1).squeeze(1)
+        # y_t = y_t.detach()
+        # use ground truth as the start token of RL to avoid the first sample is <eos>
+        samples = [tgt_sents_var[-delta].view(-1)]
         baselines = []
         sample_losses = []
         epsilon = Variable(torch.ones(batch_size * len(self.vocab.tgt)) * 1e-20, requires_grad=False)
@@ -463,7 +463,7 @@ class NMT(nn.Module):
         if args.cuda:
             epsilon = epsilon.cuda()
             offset = offset.cuda()
-            
+
         t = tgt_word_embed.size(0) - 1
         while t < args.decode_max_time_step:
             t += 1
@@ -516,7 +516,7 @@ class NMT(nn.Module):
         #     print(ss.size())
         '''The following line is because: the T-s steps might have already included the <eos> token,
          in this case no RL loss follows.'''
-        samples = incomplete_ground_truth + samples
+        samples = incomplete_ground_truth + samples[1:]
         completed_samples = [list() for _ in range(batch_size)]
         rewards = [-1] * batch_size
         mask_samples = [list() for _ in range(len(samples))]
@@ -553,7 +553,8 @@ class NMT(nn.Module):
                 rewards = rewards.cuda()
         else:
             new_rewards = []
-            for i in range(1, len(samples)):
+            # starts from 0, because in line-519 we use the ground truth as the first token of RL and remove duplicates
+            for i in range(0, len(samples)):
                 tmp = []
                 for j in range(batch_size):
                     if type(rewards[j]) is float:
@@ -575,12 +576,11 @@ class NMT(nn.Module):
         len_CE = len(incomplete_ground_truth)
         # print("len_ce: ", len_CE)
         mask_sum = 0.0
-        for i in range(len(samples) - 1):
-            if i < len_CE:
-                continue
+        # len(samples) = len(baseline) + 1
+        for i in range(len_CE, len(samples)-1):
             sample_ind = i - len_CE
             b_t = baselines[sample_ind]
-            mask_t = mask_samples[i+1]  # Caution here!
+            mask_t = mask_samples[i]  # Caution here!
             prob_t = sample_losses[sample_ind]
 
             b_t_detach = b_t.detach()
@@ -588,8 +588,8 @@ class NMT(nn.Module):
                 prob_t = (rewards - b_t_detach) * prob_t
                 b_t = (rewards - b_t).pow(2)
             else:
-                prob_t = (rewards[sample_ind] - b_t_detach) * prob_t
-                b_t = (rewards[sample_ind] - b_t).pow(2)
+                prob_t = (rewards[i] - b_t_detach) * prob_t
+                b_t = (rewards[i] - b_t).pow(2)
 
             mask_sum += sum(mask_t.data)
             if 0.0 in mask_t.data:
@@ -600,11 +600,14 @@ class NMT(nn.Module):
             loss_b.append(b_t)
             loss_t.append(prob_t)
 
+        # print("one iter!")
             # print("rewards: ", rewards)
+
         loss_b = torch.cat(loss_b, 0)  # max_len, batch_size
         prob_t = torch.cat(loss_t, 0)
         # print("before sum loss b: ", loss_b)
         # print("before sum prob: ", prob_t)
+        # print(len(loss_b), mask_sum)
         sum_loss_b = torch.sum(loss_b) / mask_sum
         sum_prob_t = torch.sum(prob_t) / batch_size
 
