@@ -576,8 +576,8 @@ class NMT(nn.Module):
         len_CE = len(incomplete_ground_truth)
         # print("len_ce: ", len_CE)
         mask_sum = 0.0
-        # len(samples) = len(baseline) + 1
-        for i in range(len_CE, len(samples)-1):
+        
+        for i in range(len_CE, len(samples)):
             sample_ind = i - len_CE
             b_t = baselines[sample_ind]
             mask_t = mask_samples[i]  # Caution here!
@@ -789,15 +789,6 @@ class NMT(nn.Module):
             # FIXme: the correct index of mask_t
             mask_t = mask_sample[(i+1)*batch_size:(i+2)*batch_size]
             prob_t = sample_losses[i]
-
-            # print(rewards.size())
-            # print(b_t.size())
-            # print(prob_t.size())
-            # neg_log_probs += prob_t
-            # print("time step: ", i)
-            # print("rewards: ", rewards.size())
-            # print("baselines: ", b_t.size())
-            # print(type(prob_t))
 
             b_t_detach = b_t.detach()
             if not 'delta' in reward_type:
