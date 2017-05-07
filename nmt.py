@@ -535,7 +535,7 @@ class NMT(nn.Module):
                             rewards[i] = 0.0
                         else:
                             rewards[i] = get_reward(tgt_sents_tokens[i][1:-1], word2id(completed_samples[i][1:-1],
-                                                    self.vocab.tgt.id2word), reward_type, len(samples)-1)
+                                                    self.vocab.tgt.id2word), reward_type, len(samples))
 
         # Clean up: if no <eos> is predicted, we still calculate rewards
         for i in range(batch_size):
@@ -545,7 +545,7 @@ class NMT(nn.Module):
                 else:
                     rewards[i] = get_reward(tgt_sents_tokens[i][1:-1],
                                                word2id(completed_samples[i][1:],
-                                                       self.vocab.tgt.id2word), reward_type, len(samples)-1)
+                                                       self.vocab.tgt.id2word), reward_type, len(samples))
 
         if not 'delta' in reward_type:
             rewards = Variable(torch.FloatTensor(rewards), requires_grad=False)
