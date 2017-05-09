@@ -59,12 +59,12 @@ def init_config():
     parser.add_argument('--clip_grad', default=5., type=float, help='clip gradients')
     parser.add_argument('--max_niter', default=-1, type=int, help='maximum number of training iterations')
     parser.add_argument('--lr', default=0.001, type=float, help='learning rate')
-    parser.add_argument('--lr_decay', default=0.5, type=float, help='decay learning rate if the validation performance drops')
+    parser.add_argument('--lr_decay', default=0.95, type=float, help='decay learning rate if the validation performance drops')
     parser.add_argument('--update_freq', default=1, type=int, help='update freq')
     parser.add_argument('--reward_type', default='bleu', type=str, choices=['bleu', 'f1', 'combined','delta_f1','length','repeat'])
 
     parser.add_argument('--run_with_no_patience', default=10, type=int, help="If patience hit within these many first epochs, reset patience=0.")
-    parser.add_argument('--delta_steps', default=3, type=int, help='MIXER: annealing steps for using REINFROCE loss')
+    parser.add_argument('--delta_steps', default=4, type=int, help='MIXER: annealing steps for using REINFROCE loss')
     parser.add_argument('--XER', default=2, type=int, help='Every XER epoches, decrease delta by delta.' )
     # raml training
     # parser.add_argument('--temp', default=0.85, type=float, help='temperature in reward distribution')
@@ -1014,7 +1014,7 @@ def train(args):
 
             elif args.model_type == 'mixer':
                 if epoch % args.XER == 0:
-                    delta += delta
+                    delta += args.delta_steps
                 max_len = max(tgt_sents_len)
                 if delta >= max_len - 1:
                     # Totally switch to RL training
@@ -1128,7 +1128,8 @@ def train(args):
                         print('early stop!', file=sys.stderr)
                         print('the best model is from iteration [%d]' % best_model_iter, file=sys.stderr)
                         exit(0)
-
+                if optimizer.param_groups[0]['lr'] < 1e-8:
+                    exit(0)
 
 def get_bleu(references, hypotheses):
     # compute BLEU
