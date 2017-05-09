@@ -61,7 +61,7 @@ def init_config():
     parser.add_argument('--lr', default=0.001, type=float, help='learning rate')
     parser.add_argument('--lr_decay', default=0.5, type=float, help='decay learning rate if the validation performance drops')
     parser.add_argument('--update_freq', default=1, type=int, help='update freq')
-    parser.add_argument('--reward_type', default='bleu', type=str, choices=['bleu', 'f1', 'combined','delta_f1'])
+    parser.add_argument('--reward_type', default='bleu', type=str, choices=['bleu', 'f1', 'combined','delta_f1','length','repeat'])
 
     parser.add_argument('--run_with_no_patience', default=10, type=int, help="If patience hit within these many first epochs, reset patience=0.")
     parser.add_argument('--delta_steps', default=3, type=int, help='MIXER: annealing steps for using REINFROCE loss')
@@ -136,6 +136,10 @@ def get_reward(tgt_sent, sample, reward='bleu',max_len=0):
         for i in range(max_len-len(score_list)):
             score_list.append(0)
         score = score_list
+    elif reward == 'length':
+        score = get_length(tgt_sent, sample)
+    elif reward == 'repeat':
+        score = get_repeat(tgt_sent, sample)
     return score
 
 

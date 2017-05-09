@@ -2,6 +2,7 @@ from __future__ import division
 from collections import defaultdict, Counter
 import numpy as np
 
+
 def read_corpus(file_path, source):
     data = []
     for line in open(file_path):
@@ -65,6 +66,21 @@ def ngrams(sequence, n):
         history.append(item)
         yield tuple(history)
         del history[0]
+
+def get_length(reference, hypothesis):
+    difference = abs(len(reference) - len(hypothesis))
+    difference = difference*1.0/ len(reference)
+    return -difference
+
+def get_repeat(reference, hypothesis):
+    previous = hypothesis[0]
+    count = 0.
+    for word in hypothesis[1:]:
+        if word == previous:
+            count+=1
+        previous = word
+    return -count*1.0/len(hypothesis)
+
 
 
 def calc_f1(reference, hypothesis):
