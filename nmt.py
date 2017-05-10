@@ -1113,6 +1113,8 @@ def train(args):
                 if is_better:
                     patience = 0
                     best_model_iter = train_iter
+                    
+                    model_file = args.save_to + '.iter%d.bin' % train_ite
                     print('save currently the best model ..', file=sys.stderr)
                     model_file_abs_path = os.path.abspath(model_file)
                     symlin_file_abs_path = os.path.abspath(args.save_to + '.bin')
