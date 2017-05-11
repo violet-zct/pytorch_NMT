@@ -1023,19 +1023,19 @@ class NMT(nn.Module):
                     new_rewards[s].append(rewards[s*sample_size + j])
                     new_sent_probs[s].append(sent_probs[s*sample_size + j])
                 prev = elem
-                new_completed_samples[s].append(tgt_sents_var[:, s].data.cpu().numpy().tolist())
-                new_rewards[s].append(1.0)
-                new_sent_probs[s].append(gt_probs_sents[s])
-                new_sent_probs_t = torch.stack(new_sent_probs[s]) * args.alpha
-                new_sent_probs_norm = torch.nn.functional.softmax(new_sent_probs_t.t())
-                new_rewards_t = Variable(torch.FloatTensor(new_rewards[s]), requires_grad=False)
-                if args.cuda:
-                    new_rewards_t = new_rewards_t.cuda()
+            new_completed_samples[s].append(tgt_sents_var[:, s].data.cpu().numpy().tolist())
+            new_rewards[s].append(1.0)
+            new_sent_probs[s].append(gt_probs_sents[s])
+            new_sent_probs_t = torch.stack(new_sent_probs[s]) * args.alpha
+            new_sent_probs_norm = torch.nn.functional.softmax(new_sent_probs_t.t())
+            new_rewards_t = Variable(torch.FloatTensor(new_rewards[s]), requires_grad=False)
+            if args.cuda:
+                new_rewards_t = new_rewards_t.cuda()
 #                print(new_rewards_t.data)
-                final_rewards.append(torch.sum(new_rewards_t))
-                risk = new_sent_probs_norm * new_rewards_t
-                risk_vals.append(torch.sum(risk))
-                #completed_samples[s] = list(completed_samples[s] for completed_samples[s],_ in itertools.groupby(completed_samples[s]))
+            final_rewards.append(torch.sum(new_rewards_t))
+            risk = new_sent_probs_norm * new_rewards_t
+            risk_vals.append(torch.sum(risk))
+            #completed_samples[s] = list(completed_samples[s] for completed_samples[s],_ in itertools.groupby(completed_samples[s]))
 
         return -torch.sum(torch.stack(risk_vals))/src_sents_num, torch.sum(torch.stack(final_rewards))
 
