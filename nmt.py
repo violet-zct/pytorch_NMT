@@ -137,7 +137,7 @@ def get_reward(tgt_sent, sample, reward='bleu', max_len=0):
         score_list = list(reversed(score_list))
         for i in range(max_len-len(score_list)):
             score_list.append(0)
-        score = score_listi
+        score = score_list
     elif reward == 'length':
         score = get_length(tgt_sent, sample)
     elif reward == 'repeat':
@@ -851,19 +851,20 @@ class NMT(nn.Module):
         tgt_sents_var = to_input_variable(tgt_sents, self.vocab.tgt, cuda=args.cuda, is_test=False)
         src_encoding, dec_init_vec = self.encode(src_sents_var, [len(s) for s in src_sents])
         (dec_init_state, dec_init_cell) = dec_init_vec
-       
+
         # Compute ground truth sentence probabilities
         gt_logits = self.decode(src_encoding, dec_init_vec, tgt_sents_var[:-1]) # ts, bs, voc_size
         gt_logits = gt_logits.view(-1, gt_logits.size(2))
         gt_probs = torch.nn.functional.log_softmax(gt_logits) # bs*ts, voc_size
-	tgt_offset = torch.mul(torch.range(0, src_sents_num*(tgt_sents_var.size(0)-1)-1), len(self.vocab.tgt)).long() # bs*ts
-        if args.cuda: tgt_offset = tgt_offset.cuda()
+        tgt_offset = torch.mul(torch.range(0, src_sents_num*(tgt_sents_var.size(0)-1)-1), len(self.vocab.tgt)).long() # bs*ts
+        if args.cuda:
+            tgt_offset = tgt_offset.cuda()
         flat_tgt_gt = tgt_sents_var[1:].view(-1).data + tgt_offset # tgt_var: ts*bs
-	
+
         flat_probs = gt_probs.view(-1)[flat_tgt_gt]
         gt_probs_mat = flat_probs.view(tgt_sents_var[1:].size())
         gt_probs_sents = torch.sum(gt_probs_mat, 0).squeeze(0)
-       
+
         src_encoding = src_encoding.repeat(1, sample_size, 1)
         dec_init_state = dec_init_state.repeat(sample_size, 1)
         dec_init_cell = dec_init_cell.repeat(sample_size, 1)
@@ -902,8 +903,6 @@ class NMT(nn.Module):
         t = 0
         while t <= args.decode_max_time_step:
             t += 1 
-
-            # (sample_size)
             y_tm1 = samples[-1]
 
             y_tm1_embed = self.tgt_embed(y_tm1)
@@ -929,7 +928,7 @@ class NMT(nn.Module):
 
             samples.append(y_t)
             p_t = p_t.view(-1)
-            p_t = torch.log(p_t)           
+            p_t = torch.log(p_t)
  
             sample_probs.append(p_t[y_t_offset])
 
@@ -941,7 +940,7 @@ class NMT(nn.Module):
             hidden = h_t, cell_t
 
         # post-processing
-        
+
         completed_samples = [list([list() for _ in xrange(sample_size)]) for _ in xrange(src_sents_num)]
         mask_samples = []
         rewards = [-1] * batch_size
@@ -962,8 +961,8 @@ class NMT(nn.Module):
                             rewards[i] = get_reward(tgt_sents[src_sent_id][1:-1],
                                                 word2id(completed_samples[src_sent_id][sample_id][1:-1],
                                                         self.vocab.tgt.id2word), reward_type,len(samples))
-        
-       
+
+
         # if no <eos> is predicted, we still calculate rewards
         for i in range(batch_size):
             src_sent_id = i % src_sents_num
@@ -990,7 +989,7 @@ class NMT(nn.Module):
         loss_t = []
         if args.cuda:
             mask_samples = mask_samples.cuda()
-        
+
         for i in range(len(samples)-1):
             mask_t = mask_samples[(i+1)*batch_size : (i+2)*batch_size]
             prob_t = sample_probs[i]
@@ -1002,29 +1001,28 @@ class NMT(nn.Module):
 
         prob_t_mat = torch.cat(loss_t, 1) # ts, bs
         sent_probs = torch.sum(prob_t_mat, 1).squeeze(1)
-        
 
-	# remove duplicate samples and compute q-values
-	new_completed_samples = [list() for _ in xrange(src_sents_num)]
+        # remove duplicate samples and compute q-values
+        new_completed_samples = [list() for _ in xrange(src_sents_num)]
         new_rewards = [list() for _ in range(src_sents_num)]
-	new_sent_probs = [list() for _ in range(src_sents_num)]
+        new_sent_probs = [list() for _ in range(src_sents_num)]
         risk_vals = []
         final_rewards = []
         for s in range(src_sents_num):
-		completed_samples[s].sort()
-                prev = completed_samples[s][0]
-                new_completed_samples[s].append(completed_samples[s][0])
-                new_rewards[s].append(rewards[s*sample_size])
-                new_sent_probs[s].append(sent_probs[s*sample_size])
-                for j, elem in enumerate(completed_samples[s][1:]):
-                   if prev==elem:
-			continue
-		   else:
-		        new_completed_samples[s].append(elem)
-			new_rewards[s].append(rewards[s*sample_size + j])
-                        new_sent_probs[s].append(sent_probs[s*sample_size + j])
-                   prev = elem
-                new_completed_samples[s].append(tgt_sents_var[:,s].data.cpu().numpy().tolist())
+            completed_samples[s].sort()
+            prev = completed_samples[s][0]
+            new_completed_samples[s].append(completed_samples[s][0])
+            new_rewards[s].append(rewards[s*sample_size])
+            new_sent_probs[s].append(sent_probs[s*sample_size])
+            for j, elem in enumerate(completed_samples[s][1:]):
+                if prev==elem:
+                    continue
+                else:
+                    new_completed_samples[s].append(elem)
+                    new_rewards[s].append(rewards[s*sample_size + j])
+                    new_sent_probs[s].append(sent_probs[s*sample_size + j])
+                prev = elem
+                new_completed_samples[s].append(tgt_sents_var[:, s].data.cpu().numpy().tolist())
                 new_rewards[s].append(1.0)
                 new_sent_probs[s].append(gt_probs_sents[s])
                 new_sent_probs_t = torch.stack(new_sent_probs[s]) * args.alpha
@@ -1037,10 +1035,8 @@ class NMT(nn.Module):
                 risk = new_sent_probs_norm * new_rewards_t
                 risk_vals.append(torch.sum(risk))
                 #completed_samples[s] = list(completed_samples[s] for completed_samples[s],_ in itertools.groupby(completed_samples[s]))
-		
-        return -torch.sum(torch.stack(risk_vals))/src_sents_num, torch.sum(torch.stack(final_rewards))
-        
 
+        return -torch.sum(torch.stack(risk_vals))/src_sents_num, torch.sum(torch.stack(final_rewards))
 
     def attention(self, h_t, src_encoding, src_linear_for_att):
         # (1, batch_size, attention_size) + (src_sent_len, batch_size, attention_size) =>
@@ -1054,7 +1050,6 @@ class NMT(nn.Module):
         ctx_vec = torch.bmm(src_encoding.permute(1, 2, 0), att_weights.unsqueeze(2)).squeeze(2)
 
         return ctx_vec, att_weights
-
 
     def dot_prod_attention(self, h_t, src_encoding, src_encoding_att_linear, mask=None):
         """
@@ -1222,7 +1217,7 @@ def train(args):
 
             elif args.model_type == 'mixer':
                 if epoch % args.XER == 0:
-                    delta += arg.delta_steps
+                    delta += args.delta_steps
                 max_len = max(tgt_sents_len)
                 if delta >= max_len - 1:
                     # Totally switch to RL training
@@ -1246,7 +1241,7 @@ def train(args):
 		reward_val = avg_reward.data[0]
                 report_loss += loss_val * batch_size
                 cum_loss += loss_val * batch_size
-                total_loss_baseline = 0.0  
+                total_loss_baseline = 0.0
 
             loss.backward()
             # clip gradient
@@ -1329,7 +1324,7 @@ def train(args):
                 if is_better:
                     patience = 0
                     best_model_iter = train_iter
-                    
+
                     model_file = args.save_to + '.iter%d.bin' % train_iter
                     print('save currently the best model ..', file=sys.stderr)
                     model_file_abs_path = os.path.abspath(model_file)
