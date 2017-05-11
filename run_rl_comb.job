@@ -23,7 +23,7 @@ home=/projects/tir1/users/chuntinz/pytorch_703
 pushd $home
 
 model_name=mle_rl_comb
-load_model_name=mle
+load_model_name=mle_update
 python nmt.py \
     --train_src ./en-de/train.en-de.low.filt.de \
     --train_tgt ./en-de/train.en-de.low.filt.en \
@@ -44,6 +44,7 @@ python nmt.py \
     --mode train\
     --update_freq 3\
     --valid_niter 1000 \
+    --lr 0.0001 \
     --cuda\
 
 
