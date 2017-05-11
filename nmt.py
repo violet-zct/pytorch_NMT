@@ -1154,7 +1154,7 @@ def init_training(args):
         optimizer = torch.optim.Adam(model.parameters(), lr=args.lr)
     else:
         # rl
-        optimizer = torch.optim.SGD(model.parameters(), lr=1e-4, momentum=0.)
+        optimizer = torch.optim.SGD(model.parameters(), lr=args.lr, momentum=0.)
 
     return vocab, model, optimizer, nll_loss, cross_entropy_loss
 
