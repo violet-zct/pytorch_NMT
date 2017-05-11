@@ -47,7 +47,7 @@ def init_config():
                                                                               'in decoding and sampling')
 
     parser.add_argument('--model_type', default='ml', type=str, choices=['ml','rl', 'mixer', 'mrt'])
-    parser.add_argument('--valid_niter', default=500, type=int, help='every n iterations to perform validation')
+    parser.add_argument('--valid_niter', default=10000, type=int, help='every n iterations to perform validation')
     parser.add_argument('--valid_metric', default='bleu', choices=['bleu', 'ppl', 'word_acc', 'sent_acc'], help='metric used for validation')
     parser.add_argument('--log_every', default=500, type=int, help='every n iterations to log training statistics')
     parser.add_argument('--load_model', default=None, type=str, help='load a pre-trained model')
@@ -59,7 +59,7 @@ def init_config():
     parser.add_argument('--uniform_init', default=None, type=float, help='if specified, use uniform initialization for all parameters')
     parser.add_argument('--clip_grad', default=5., type=float, help='clip gradients')
     parser.add_argument('--max_niter', default=-1, type=int, help='maximum number of training iterations')
-    parser.add_argument('--lr', default=0.001, type=float, help='learning rate')
+    parser.add_argument('--lr', default=0.0005, type=float, help='learning rate')
     parser.add_argument('--lr_decay', default=0.5, type=float, help='decay learning rate if the validation performance drops')
     parser.add_argument('--update_freq', default=1, type=int, help='update freq')
     parser.add_argument('--reward_type', default='bleu', type=str, choices=['bleu', 'f1', 'combined','delta_f1', 'length', 'repeat'])
@@ -902,7 +902,7 @@ class NMT(nn.Module):
 
         t = 0
         while t <= args.decode_max_time_step:
-            t += 1 
+            t += 1
             y_tm1 = samples[-1]
 
             y_tm1_embed = self.tgt_embed(y_tm1)
