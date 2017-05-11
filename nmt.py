@@ -62,10 +62,10 @@ def init_config():
     parser.add_argument('--lr', default=0.001, type=float, help='learning rate')
     parser.add_argument('--lr_decay', default=0.5, type=float, help='decay learning rate if the validation performance drops')
     parser.add_argument('--update_freq', default=1, type=int, help='update freq')
-    parser.add_argument('--reward_type', default='bleu', type=str, choices=['bleu', 'f1', 'combined','delta_f1'])
+    parser.add_argument('--reward_type', default='bleu', type=str, choices=['bleu', 'f1', 'combined','delta_f1', 'length', 'repeat'])
 
     parser.add_argument('--run_with_no_patience', default=10, type=int, help="If patience hit within these many first epochs, reset patience=0.")
-    parser.add_argument('--delta_steps', default=3, type=int, help='MIXER: annealing steps for using REINFROCE loss')
+    parser.add_argument('--delta_steps', default=4, type=int, help='MIXER: annealing steps for using REINFROCE loss')
     parser.add_argument('--XER', default=2, type=int, help='Every XER epoches, decrease delta by delta.' )
     parser.add_argument('--alpha', default=0.005, type=float, help='alpha value for minimum risk training')
     # raml training
@@ -137,7 +137,11 @@ def get_reward(tgt_sent, sample, reward='bleu',max_len=0):
         score_list = list(reversed(score_list))
         for i in range(max_len-len(score_list)):
             score_list.append(0)
-        score = score_list
+        score = score_listi
+    elif reward == 'length':
+        score = get_length(tgt_sent, sample)
+    elif reward == 'repeat':
+        score = get_repeat(tgt_sent, sample)
     return score
 
 
@@ -537,7 +541,7 @@ class NMT(nn.Module):
                             rewards[i] = 0.0
                         else:
                             rewards[i] = get_reward(tgt_sents_tokens[i][1:-1], word2id(completed_samples[i][1:-1],
-                                                    self.vocab.tgt.id2word), reward_type, len(samples)-1)
+                                                    self.vocab.tgt.id2word), reward_type, len(samples))
 
         # Clean up: if no <eos> is predicted, we still calculate rewards
         for i in range(batch_size):
@@ -547,7 +551,7 @@ class NMT(nn.Module):
                 else:
                     rewards[i] = get_reward(tgt_sents_tokens[i][1:-1],
                                                word2id(completed_samples[i][1:],
-                                                       self.vocab.tgt.id2word), reward_type, len(samples)-1)
+                                                       self.vocab.tgt.id2word), reward_type, len(samples))
 
         if not 'delta' in reward_type:
             rewards = Variable(torch.FloatTensor(rewards), requires_grad=False)
@@ -959,8 +963,6 @@ class NMT(nn.Module):
                                                 word2id(completed_samples[src_sent_id][sample_id][1:-1],
                                                         self.vocab.tgt.id2word), reward_type,len(samples))
         
-
-
        
         # if no <eos> is predicted, we still calculate rewards
         for i in range(batch_size):
@@ -974,7 +976,14 @@ class NMT(nn.Module):
                                                word2id(completed_samples[src_sent_id][sample_id][1:],
                                                        self.vocab.tgt.id2word), reward_type, len(samples))
 
-
+#        if True:
+#            for i, src_sent_samples in enumerate(completed_samples):
+#                tgt_sent_id = i % src_sents_num
+#                print("Ground truth: ", ' '.join(tgt_sents[tgt_sent_id]))
+#                completed_samples[i] = word2id(src_sent_samples, self.vocab.tgt.id2word)
+#                for e in completed_samples[i]:
+#                    print(' '.join(e))
+ 
 
         mask_samples = Variable(torch.FloatTensor(mask_samples), requires_grad=False)
 
@@ -1015,12 +1024,15 @@ class NMT(nn.Module):
 			new_rewards[s].append(rewards[s*sample_size + j])
                         new_sent_probs[s].append(sent_probs[s*sample_size + j])
                    prev = elem
-                new_completed_samples[s].append(tgt_sents_var[:,s].data.numpy().tolist())
+                new_completed_samples[s].append(tgt_sents_var[:,s].data.cpu().numpy().tolist())
                 new_rewards[s].append(1.0)
                 new_sent_probs[s].append(gt_probs_sents[s])
                 new_sent_probs_t = torch.stack(new_sent_probs[s]) * args.alpha
                 new_sent_probs_norm = torch.nn.functional.softmax(new_sent_probs_t.t())
                 new_rewards_t = Variable(torch.FloatTensor(new_rewards[s]), requires_grad=False)
+                if args.cuda:
+                    new_rewards_t = new_rewards_t.cuda()
+#                print(new_rewards_t.data)
                 final_rewards.append(torch.sum(new_rewards_t))
                 risk = new_sent_probs_norm * new_rewards_t
                 risk_vals.append(torch.sum(risk))
@@ -1113,7 +1125,7 @@ def evaluate_loss(model, data, crit):
 def init_training(args):
     vocab = torch.load(args.vocab)
 
-    if args.model_type == "rl" or args.model_type == "mixer":
+    if args.model_type == "rl" or args.model_type == "mixer" or args.model_type == 'mrt':
         assert args.load_model is not None, "Path to pretrained model is not provided!!"
         print('load model from [%s] for RL training' % args.load_model, file=sys.stderr)
         params = torch.load(args.load_model, map_location=lambda storage, loc: storage)
@@ -1210,7 +1222,7 @@ def train(args):
 
             elif args.model_type == 'mixer':
                 if epoch % args.XER == 0:
-                    delta += delta
+                    delta += arg.delta_steps
                 max_len = max(tgt_sents_len)
                 if delta >= max_len - 1:
                     # Totally switch to RL training
@@ -1317,12 +1329,12 @@ def train(args):
                 if is_better:
                     patience = 0
                     best_model_iter = train_iter
-
-                    if valid_num > args.save_model_after:
-                        print('save currently the best model ..', file=sys.stderr)
-                        model_file_abs_path = os.path.abspath(model_file)
-                        symlin_file_abs_path = os.path.abspath(args.save_to + '.bin')
-                        os.system('ln -sf %s %s' % (model_file_abs_path, symlin_file_abs_path))
+                    
+                    model_file = args.save_to + '.iter%d.bin' % train_iter
+                    print('save currently the best model ..', file=sys.stderr)
+                    model_file_abs_path = os.path.abspath(model_file)
+                    symlin_file_abs_path = os.path.abspath(args.save_to + '.bin')
+                    os.system('ln -sf %s %s' % (model_file_abs_path, symlin_file_abs_path))
                 else:
                     patience += 1
                     print('hit patience %d' % patience, file=sys.stderr)
@@ -1332,6 +1344,9 @@ def train(args):
                         print('early stop!', file=sys.stderr)
                         print('the best model is from iteration [%d]' % best_model_iter, file=sys.stderr)
                         exit(0)
+
+                if optimizer.param_groups[0]['lr'] < 1e-8:
+                    exit(0)
 
 
 def get_bleu(references, hypotheses):
