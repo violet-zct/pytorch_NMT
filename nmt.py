@@ -629,6 +629,7 @@ class NMT(nn.Module):
 
         return ce_loss, sum_loss_b, sum_prob_t, mean_rewards
 
+    # REINFORCE
     def sample_with_loss(self, src_sents, tgt_sents, sample_size=None, to_word=False, reward_type="bleu"):
         if not type(src_sents[0]) == list:
             src_sents = [src_sents]
@@ -1238,7 +1239,7 @@ def train(args):
             elif args.model_type == 'mrt':
                 loss, avg_reward = model.mrt(src_sents, tgt_sents, args.sample_size, False, reward_type=args.reward_type)
                 loss_val = loss.data[0]
-		reward_val = avg_reward.data[0]
+                reward_val = avg_reward.data[0]
                 report_loss += loss_val * batch_size
                 cum_loss += loss_val * batch_size
                 total_loss_baseline = 0.0
@@ -1311,10 +1312,10 @@ def train(args):
                 is_better_than_last = len(hist_valid_scores) == 0 or valid_metric > hist_valid_scores[-1]
                 hist_valid_scores.append(valid_metric)
 
-                if valid_num > args.save_model_after:
-                    model_file = args.save_to + '.iter%d.bin' % train_iter
-                    print('save model to [%s]' % model_file, file=sys.stderr)
-                    model.save(model_file)
+                # if valid_num > args.save_model_after:
+                #     model_file = args.save_to + '.iter%d.bin' % train_iter
+                #     print('save model to [%s]' % model_file, file=sys.stderr)
+                #     model.save(model_file)
 
                 if (not is_better_than_last) and args.lr_decay:
                     lr = optimizer.param_groups[0]['lr'] * args.lr_decay
