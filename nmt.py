@@ -106,7 +106,7 @@ def tensor_transform(linear, X):
     return linear(X.contiguous().view(-1, X.size(2))).view(X.size(0), X.size(1), -1)
 
 
-def get_reward(tgt_sent, sample, reward='bleu',max_len=0):
+def get_reward(tgt_sent, sample, reward='bleu', max_len=0):
     sm = SmoothingFunction()
     if reward=='bleu':
         score = sentence_bleu([tgt_sent], sample, smoothing_function=sm.method3)
@@ -576,7 +576,7 @@ class NMT(nn.Module):
         len_CE = len(incomplete_ground_truth)
         # print("len_ce: ", len_CE)
         mask_sum = 0.0
-        
+
         for i in range(len_CE, len(samples)):
             sample_ind = i - len_CE
             b_t = baselines[sample_ind]
