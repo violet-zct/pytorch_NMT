@@ -42,7 +42,7 @@ python nmt.py \
     --save_to $model_name\
     --mode train\
     --valid_niter 2500 \
-
+    --cuda\
 
 load_model_name=mle_update
 python nmt.py \

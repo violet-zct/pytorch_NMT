@@ -23,7 +23,7 @@ home=/projects/tir1/users/chuntinz/pytorch_703
 pushd $home
 
 model_name=mle_rl_bleu
-load_model_name=mle
+load_model_name=mle_update
 python nmt.py \
     --train_src ./en-de/train.en-de.low.filt.de \
     --train_tgt ./en-de/train.en-de.low.filt.en \
@@ -35,7 +35,7 @@ python nmt.py \
     --dropout 0.5\
     --decode_max_time_step 100\
     --batch_size 16\
-    --sample_size  15\
+    --sample_size  16\
     --reward_type "bleu" \
     --model_type rl \
     --log_every 50\

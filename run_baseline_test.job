@@ -22,7 +22,7 @@ export LIBRARY_PATH=/opt/cudnn-8.0/lib64:$LD_LIBRARY_PATH
 home=/projects/tir1/users/chuntinz/pytorch_703
 pushd $home
 
-load_model_name=mle
+load_model_name=mle_update
 python nmt.py \
     --train_src ./en-de/train.en-de.low.filt.de \
     --train_tgt ./en-de/train.en-de.low.filt.en \

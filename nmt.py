@@ -13,11 +13,12 @@ from torch.nn.utils.rnn import pad_packed_sequence, pack_padded_sequence
 
 from nltk.translate.bleu_score import corpus_bleu, sentence_bleu,SmoothingFunction
 import time
+import itertools
 import numpy as np
 from collections import defaultdict, Counter, namedtuple
 from itertools import chain, islice
 import argparse, os, sys
-
+import pdb
 from util import *
 from vocab import Vocab, VocabEntry
 
@@ -45,7 +46,7 @@ def init_config():
     parser.add_argument('--decode_max_time_step', default=200, type=int, help='maximum number of time steps used '
                                                                               'in decoding and sampling')
 
-    parser.add_argument('--model_type', default='ml', type=str, choices=['ml','rl', 'mixer'])
+    parser.add_argument('--model_type', default='ml', type=str, choices=['ml','rl', 'mixer', 'mrt'])
     parser.add_argument('--valid_niter', default=500, type=int, help='every n iterations to perform validation')
     parser.add_argument('--valid_metric', default='bleu', choices=['bleu', 'ppl', 'word_acc', 'sent_acc'], help='metric used for validation')
     parser.add_argument('--log_every', default=500, type=int, help='every n iterations to log training statistics')
@@ -59,13 +60,14 @@ def init_config():
     parser.add_argument('--clip_grad', default=5., type=float, help='clip gradients')
     parser.add_argument('--max_niter', default=-1, type=int, help='maximum number of training iterations')
     parser.add_argument('--lr', default=0.001, type=float, help='learning rate')
-    parser.add_argument('--lr_decay', default=0.95, type=float, help='decay learning rate if the validation performance drops')
+    parser.add_argument('--lr_decay', default=0.5, type=float, help='decay learning rate if the validation performance drops')
     parser.add_argument('--update_freq', default=1, type=int, help='update freq')
-    parser.add_argument('--reward_type', default='bleu', type=str, choices=['bleu', 'f1', 'combined','delta_f1','length','repeat'])
+    parser.add_argument('--reward_type', default='bleu', type=str, choices=['bleu', 'f1', 'combined','delta_f1'])
 
     parser.add_argument('--run_with_no_patience', default=10, type=int, help="If patience hit within these many first epochs, reset patience=0.")
-    parser.add_argument('--delta_steps', default=4, type=int, help='MIXER: annealing steps for using REINFROCE loss')
+    parser.add_argument('--delta_steps', default=3, type=int, help='MIXER: annealing steps for using REINFROCE loss')
     parser.add_argument('--XER', default=2, type=int, help='Every XER epoches, decrease delta by delta.' )
+    parser.add_argument('--alpha', default=0.005, type=float, help='alpha value for minimum risk training')
     # raml training
     # parser.add_argument('--temp', default=0.85, type=float, help='temperature in reward distribution')
     # parser.add_argument('--raml_sample_file', type=str, help='path to the sampled targets')
@@ -132,14 +134,10 @@ def get_reward(tgt_sent, sample, reward='bleu',max_len=0):
             cum_reward += reward_i
             score_list.append(cum_reward)
 
-        score_list = list(reversed(score_list))     
+        score_list = list(reversed(score_list))
         for i in range(max_len-len(score_list)):
             score_list.append(0)
         score = score_list
-    elif reward == 'length':
-        score = get_length(tgt_sent, sample)
-    elif reward == 'repeat':
-        score = get_repeat(tgt_sent, sample)
     return score
 
 
@@ -496,7 +494,7 @@ class NMT(nn.Module):
 
             y_t = torch.multinomial(p_t, num_samples=1).squeeze(1)
             y_t = y_t.detach()
-            
+
             y_t_offset = y_t.data + offset
 
             samples.append(y_t)
@@ -539,7 +537,7 @@ class NMT(nn.Module):
                             rewards[i] = 0.0
                         else:
                             rewards[i] = get_reward(tgt_sents_tokens[i][1:-1], word2id(completed_samples[i][1:-1],
-                                                    self.vocab.tgt.id2word), reward_type, len(samples))
+                                                    self.vocab.tgt.id2word), reward_type, len(samples)-1)
 
         # Clean up: if no <eos> is predicted, we still calculate rewards
         for i in range(batch_size):
@@ -549,7 +547,7 @@ class NMT(nn.Module):
                 else:
                     rewards[i] = get_reward(tgt_sents_tokens[i][1:-1],
                                                word2id(completed_samples[i][1:],
-                                                       self.vocab.tgt.id2word), reward_type, len(samples))
+                                                       self.vocab.tgt.id2word), reward_type, len(samples)-1)
 
         if not 'delta' in reward_type:
             rewards = Variable(torch.FloatTensor(rewards), requires_grad=False)
@@ -580,7 +578,7 @@ class NMT(nn.Module):
         len_CE = len(incomplete_ground_truth)
         # print("len_ce: ", len_CE)
         mask_sum = 0.0
-        
+
         for i in range(len_CE, len(samples)):
             sample_ind = i - len_CE
             b_t = baselines[sample_ind]
@@ -670,7 +668,7 @@ class NMT(nn.Module):
             offset = offset.cuda()
             # sample_ends.cuda()
             # all_ones.cuda()
-            
+
         #    print("offset: ", type(offset))
          #   print("sample_ends: ", type(sample_ends))
          #   print("ones:", type(all_ones))
@@ -713,7 +711,7 @@ class NMT(nn.Module):
             p_t = p_t.view(-1)
             p_t = -torch.log(p_t + epsilon)
             sample_losses.append(p_t[y_t_offset])
-            
+
             sample_ends |= torch.eq(y_t, eos).byte().data
             if torch.equal(sample_ends, all_ones):
                 break
@@ -835,6 +833,203 @@ class NMT(nn.Module):
             mean_rewards = np.array([torch.mean(r) for r in rewards]).mean()
         return sum_loss_b, sum_prob_t, mean_rewards
 
+
+    def mrt(self, src_sents, tgt_sents, sample_size=None, to_word=False, reward_type="bleu"):
+
+        if not type(src_sents[0]) == list:
+            src_sents = [src_sents]
+        if not sample_size:
+            sample_size = args.sample_size
+
+        src_sents_num = len(src_sents)
+        batch_size = src_sents_num * sample_size
+        src_sents_var = to_input_variable(src_sents, self.vocab.src, cuda=args.cuda, is_test=False)
+        tgt_sents_var = to_input_variable(tgt_sents, self.vocab.tgt, cuda=args.cuda, is_test=False)
+        src_encoding, dec_init_vec = self.encode(src_sents_var, [len(s) for s in src_sents])
+        (dec_init_state, dec_init_cell) = dec_init_vec
+       
+        # Compute ground truth sentence probabilities
+        gt_logits = self.decode(src_encoding, dec_init_vec, tgt_sents_var[:-1]) # ts, bs, voc_size
+        gt_logits = gt_logits.view(-1, gt_logits.size(2))
+        gt_probs = torch.nn.functional.log_softmax(gt_logits) # bs*ts, voc_size
+	tgt_offset = torch.mul(torch.range(0, src_sents_num*(tgt_sents_var.size(0)-1)-1), len(self.vocab.tgt)).long() # bs*ts
+        if args.cuda: tgt_offset = tgt_offset.cuda()
+        flat_tgt_gt = tgt_sents_var[1:].view(-1).data + tgt_offset # tgt_var: ts*bs
+	
+        flat_probs = gt_probs.view(-1)[flat_tgt_gt]
+        gt_probs_mat = flat_probs.view(tgt_sents_var[1:].size())
+        gt_probs_sents = torch.sum(gt_probs_mat, 0).squeeze(0)
+       
+        src_encoding = src_encoding.repeat(1, sample_size, 1)
+        dec_init_state = dec_init_state.repeat(sample_size, 1)
+        dec_init_cell = dec_init_cell.repeat(sample_size, 1)
+
+        src_encoding_att_linear = tensor_transform(self.att_src_linear, src_encoding)
+        src_encoding = src_encoding.t()
+        src_encoding_att_linear = src_encoding_att_linear.t()
+
+        hidden = (dec_init_state, dec_init_cell)
+        new_tensor = dec_init_state.data.new
+
+        att_tm1 = Variable(new_tensor(batch_size, self.args.hidden_size).zero_())
+        y_0 = Variable(torch.LongTensor([self.vocab.tgt['<s>'] for _ in xrange(batch_size)]))
+
+        eos = self.vocab.tgt['</s>']
+
+        if args.cuda:
+            sample_ends = torch.cuda.ByteTensor([0] * batch_size)
+            all_ones = torch.cuda.ByteTensor([1] * batch_size)
+        else:
+            sample_ends = torch.ByteTensor([0] * batch_size)
+            all_ones = torch.ByteTensor([1] * batch_size)
+
+        # eos_batch = torch.LongTensor([eos] * batch_size)
+        offset = torch.mul(torch.range(0, batch_size - 1), len(self.vocab.tgt)).long()
+        if args.cuda:
+            y_0 = y_0.cuda()
+            # eos_batch = eos_batch.cuda()
+            offset = offset.cuda()
+            # sample_ends.cuda()
+            # all_ones.cuda()
+
+        samples = [y_0]
+        sample_probs = []
+
+        t = 0
+        while t <= args.decode_max_time_step:
+            t += 1 
+
+            # (sample_size)
+            y_tm1 = samples[-1]
+
+            y_tm1_embed = self.tgt_embed(y_tm1)
+
+            x = torch.cat([y_tm1_embed, att_tm1], 1)
+
+            # h_t: (batch_size, hidden_size)
+            h_t, cell_t = self.decoder_lstm(x, hidden)
+            h_t = self.dropout(h_t)
+
+            ctx_t, alpha_t = self.dot_prod_attention(h_t, src_encoding, src_encoding_att_linear)
+
+            att_t = F.tanh(self.att_vec_linear(torch.cat([h_t, ctx_t], 1)))  # E.q. (5)
+            att_t = self.dropout(att_t)
+
+            score_t = self.readout(att_t)  # E.q. (6)
+            p_t = F.softmax(score_t)
+
+            # Sample from multinomial
+            y_t = torch.multinomial(p_t, num_samples=1).squeeze(1)
+            y_t = y_t.detach()
+            y_t_offset = y_t.data + offset
+
+            samples.append(y_t)
+            p_t = p_t.view(-1)
+            p_t = torch.log(p_t)           
+ 
+            sample_probs.append(p_t[y_t_offset])
+
+            sample_ends |= torch.eq(y_t, eos).byte().data
+            if torch.equal(sample_ends, all_ones):
+                break
+
+            att_tm1 = att_t
+            hidden = h_t, cell_t
+
+        # post-processing
+        
+        completed_samples = [list([list() for _ in xrange(sample_size)]) for _ in xrange(src_sents_num)]
+        mask_samples = []
+        rewards = [-1] * batch_size
+        for j, y_t in enumerate(samples):
+            for i, sampled_word in enumerate(y_t.cpu().data):
+                src_sent_id = i % src_sents_num
+                sample_id = i / src_sents_num
+
+                if (len(completed_samples[src_sent_id][sample_id]) == 0 or completed_samples[src_sent_id][sample_id][-1] != eos) and rewards[sample_id] == -1:
+                    completed_samples[src_sent_id][sample_id].append(sampled_word)
+                    mask_samples.append(1.0)
+                else:
+                    mask_samples.append(0.0)
+                    if rewards[i] == -1:
+                        if len(completed_samples[src_sent_id][sample_id]) == 2:
+                            rewards[i] = 0.0
+                        else:
+                            rewards[i] = get_reward(tgt_sents[src_sent_id][1:-1],
+                                                word2id(completed_samples[src_sent_id][sample_id][1:-1],
+                                                        self.vocab.tgt.id2word), reward_type,len(samples))
+        
+
+
+       
+        # if no <eos> is predicted, we still calculate rewards
+        for i in range(batch_size):
+            src_sent_id = i % src_sents_num
+            sample_id = i / src_sents_num
+            if rewards[i] == -1:
+                if len(completed_samples[src_sent_id][sample_id]) == 1:
+                    rewards[i] = 0.0
+                else:
+                    rewards[i] = get_reward(tgt_sents[src_sent_id][1:-1],
+                                               word2id(completed_samples[src_sent_id][sample_id][1:],
+                                                       self.vocab.tgt.id2word), reward_type, len(samples))
+
+
+
+        mask_samples = Variable(torch.FloatTensor(mask_samples), requires_grad=False)
+
+        loss_t = []
+        if args.cuda:
+            mask_samples = mask_samples.cuda()
+        
+        for i in range(len(samples)-1):
+            mask_t = mask_samples[(i+1)*batch_size : (i+2)*batch_size]
+            prob_t = sample_probs[i]
+
+            if 0.0 in mask_t.data:
+                prob_t = mask_t * prob_t
+
+            loss_t.append(prob_t.unsqueeze(1))
+
+        prob_t_mat = torch.cat(loss_t, 1) # ts, bs
+        sent_probs = torch.sum(prob_t_mat, 1).squeeze(1)
+        
+
+	# remove duplicate samples and compute q-values
+	new_completed_samples = [list() for _ in xrange(src_sents_num)]
+        new_rewards = [list() for _ in range(src_sents_num)]
+	new_sent_probs = [list() for _ in range(src_sents_num)]
+        risk_vals = []
+        final_rewards = []
+        for s in range(src_sents_num):
+		completed_samples[s].sort()
+                prev = completed_samples[s][0]
+                new_completed_samples[s].append(completed_samples[s][0])
+                new_rewards[s].append(rewards[s*sample_size])
+                new_sent_probs[s].append(sent_probs[s*sample_size])
+                for j, elem in enumerate(completed_samples[s][1:]):
+                   if prev==elem:
+			continue
+		   else:
+		        new_completed_samples[s].append(elem)
+			new_rewards[s].append(rewards[s*sample_size + j])
+                        new_sent_probs[s].append(sent_probs[s*sample_size + j])
+                   prev = elem
+                new_completed_samples[s].append(tgt_sents_var[:,s].data.numpy().tolist())
+                new_rewards[s].append(1.0)
+                new_sent_probs[s].append(gt_probs_sents[s])
+                new_sent_probs_t = torch.stack(new_sent_probs[s]) * args.alpha
+                new_sent_probs_norm = torch.nn.functional.softmax(new_sent_probs_t.t())
+                new_rewards_t = Variable(torch.FloatTensor(new_rewards[s]), requires_grad=False)
+                final_rewards.append(torch.sum(new_rewards_t))
+                risk = new_sent_probs_norm * new_rewards_t
+                risk_vals.append(torch.sum(risk))
+                #completed_samples[s] = list(completed_samples[s] for completed_samples[s],_ in itertools.groupby(completed_samples[s]))
+		
+        return -torch.sum(torch.stack(risk_vals))/src_sents_num, torch.sum(torch.stack(final_rewards))
+        
+
+
     def attention(self, h_t, src_encoding, src_linear_for_att):
         # (1, batch_size, attention_size) + (src_sent_len, batch_size, attention_size) =>
         # (src_sent_len, batch_size, attention_size)
@@ -847,6 +1042,7 @@ class NMT(nn.Module):
         ctx_vec = torch.bmm(src_encoding.permute(1, 2, 0), att_weights.unsqueeze(2)).squeeze(2)
 
         return ctx_vec, att_weights
+
 
     def dot_prod_attention(self, h_t, src_encoding, src_encoding_att_linear, mask=None):
         """
@@ -1014,7 +1210,7 @@ def train(args):
 
             elif args.model_type == 'mixer':
                 if epoch % args.XER == 0:
-                    delta += args.delta_steps
+                    delta += delta
                 max_len = max(tgt_sents_len)
                 if delta >= max_len - 1:
                     # Totally switch to RL training
@@ -1031,6 +1227,14 @@ def train(args):
                 report_loss += loss_val * batch_size
                 cum_loss += loss_val * batch_size
                 total_loss_baseline += loss_b.data[0] * batch_size
+
+            elif args.model_type == 'mrt':
+                loss, avg_reward = model.mrt(src_sents, tgt_sents, args.sample_size, False, reward_type=args.reward_type)
+                loss_val = loss.data[0]
+		reward_val = avg_reward.data[0]
+                report_loss += loss_val * batch_size
+                cum_loss += loss_val * batch_size
+                total_loss_baseline = 0.0  
 
             loss.backward()
             # clip gradient
@@ -1114,11 +1318,11 @@ def train(args):
                     patience = 0
                     best_model_iter = train_iter
 
-                    model_file = args.save_to + '.iter%d.bin' % train_iter
-                    print('save currently the best model ..', file=sys.stderr)
-                    model_file_abs_path = os.path.abspath(model_file)
-                    symlin_file_abs_path = os.path.abspath(args.save_to + '.bin')
-                    os.system('ln -sf %s %s' % (model_file_abs_path, symlin_file_abs_path))
+                    if valid_num > args.save_model_after:
+                        print('save currently the best model ..', file=sys.stderr)
+                        model_file_abs_path = os.path.abspath(model_file)
+                        symlin_file_abs_path = os.path.abspath(args.save_to + '.bin')
+                        os.system('ln -sf %s %s' % (model_file_abs_path, symlin_file_abs_path))
                 else:
                     patience += 1
                     print('hit patience %d' % patience, file=sys.stderr)
@@ -1128,8 +1332,7 @@ def train(args):
                         print('early stop!', file=sys.stderr)
                         print('the best model is from iteration [%d]' % best_model_iter, file=sys.stderr)
                         exit(0)
-                if optimizer.param_groups[0]['lr'] < 1e-8:
-                    exit(0)
+
 
 def get_bleu(references, hypotheses):
     # compute BLEU
@@ -1305,3 +1508,5 @@ if __name__ == '__main__':
         test(args)
     else:
         raise RuntimeError('unknown mode')
+
+
